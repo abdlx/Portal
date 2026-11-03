@@ -6,6 +6,28 @@
 # Tailscale IP if Tailscale is present, otherwise localhost only.
 set -euo pipefail
 
+# --- Flags -------------------------------------------------------------------
+# --skip-browser: skip the Camoufox browser download + system-library
+# install. For app-only updates when the browser is already installed.
+# (Without the flag, `npx camoufox fetch` still skips the download when the
+# pinned version is already present — the flag skips even the check.)
+SKIP_BROWSER=0
+for arg in "$@"; do
+  case "$arg" in
+    --skip-browser|--skip-camoufox) SKIP_BROWSER=1 ;;
+    -h|--help)
+      echo "Usage: bash install.sh [--skip-browser]"
+      echo "  --skip-browser   Skip the Camoufox browser download and system-library install."
+      echo "                   Use when updating the app and the browser is already installed."
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg (see --help)" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # Self-bootstrap for the one-line install:
 #   curl -fsSL https://raw.githubusercontent.com/abdlx/Portal/main/install.sh | bash
 # From a pipe there is no checkout in $PWD (and $0 is just "bash"), so clone
@@ -57,6 +79,11 @@ if ! npm install --no-audit --no-fund; then
   echo "desktop panel's Install button can retry the Camoufox install."
 fi
 
+# --skip-browser wraps this whole section: on app-only updates the browser
+# download + library check are skipped entirely.
+if [ "$SKIP_BROWSER" = "1" ]; then
+  echo "Skipping Camoufox browser setup (--skip-browser). If the browser was never installed, browser tools will fail — run without the flag, or run 'npx camoufox fetch' in the app directory."
+else
 # --- Camoufox browser + system libraries ------------------------------------
 # Camoufox (patched Firefox, MPL-2.0) is free: no key, no activation.
 # `npx camoufox fetch` downloads the paired browser build once. Firefox
@@ -82,6 +109,7 @@ if command -v apt-get >/dev/null 2>&1; then
     echo "If the browser fails to start with a missing .so error, run:"
     echo "  sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64 tigervnc-standalone-server"
   fi
+fi
 fi
 
 # --- Bind address: Tailscale IP when present, localhost otherwise ----------

@@ -26,6 +26,8 @@ bash install.sh
 
 If `./install.sh` says "permission denied", run `bash install.sh` — file modes don't survive every download path.
 
+Updating: `cd ~/portal && git pull && bash install.sh --skip-browser` updates the app without re-checking the browser download. Without the flag the installer still skips the download when the pinned Camoufox version is already installed — the flag only skips the check itself.
+
 ## After install
 
 1. **Browser engine.** Camoufox is free software (wrapper MIT, browser MPL-2.0) — no key, no activation, no session limit. If the install step above reported a failure, run `npx camoufox fetch` in the app directory, then `systemctl --user restart portal.service`. If the browser fails to start with a missing `.so` error, install the libraries: `sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64`. Vendor detection claims are unverified; test on a disposable account first. Note the engine is Firefox: sites that key on Chromium identity will see Firefox, which is the point of a second engine, not a drop-in replacement for every site.
