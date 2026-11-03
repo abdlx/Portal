@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal — bot control panel</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+  header { padding: 16px 20px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+  h1 { font-size: 20px; margin: 0; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .card { background: #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { margin-top: 0; font-size: 16px; }
+  input, button, select { font-size: 14px; padding: 8px 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; }
+  button { cursor: pointer; background: #2563eb; border-color: #2563eb; color: #fff; }
+  button.secondary { background: #334155; border-color: #475569; }
+  button.danger { background: #b91c1c; border-color: #b91c1c; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #334155; vertical-align: top; }
+  code { background: #0f172a; padding: 2px 6px; border-radius: 6px; word-break: break-all; font-size: 12px; }
+  .muted { color: #94a3b8; font-size: 13px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+  .ok { background: #22c55e; } .bad { background: #ef4444; } .idle { background: #94a3b8; }
+  #login { max-width: 420px; margin: 80px auto; }
+  .hidden { display: none; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; padding: 10px; border-radius: 8px; max-height: 300px; overflow: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>💻 Portal</h1>
+  <span id="conn" class="muted">not signed in</span>
+</header>
+<main>
+  <div id="login" class="card">
+    <h2>Owner sign-in</h2>
+    <p class="muted">Enter the owner token. It was printed when the server first started and lives in <code>~/.portal/vault.json</code> (owner-readable only). It never leaves this laptop.</p>
+    <div class="row">
+      <input id="ownerToken" type="password" placeholder="portal_owner_…" style="flex:1" autocomplete="off">
+      <button id="signInBtn">Sign in</button>
+    </div>
+    <p id="loginErr" class="muted"></p>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="card">
+      <h2>Status</h2>
+      <div id="status">Loading…</div>
+      <div class="row" style="margin-top:10px">
+        <button id="installBtn">Install / repair CloakBrowser</button>
+        <span id="installState" class="muted"></span>
+      </div>
+      <pre id="installLog" class="hidden"></pre>
+      <p class="muted">CloakBrowser is the stealth engine. If it is not installed, bots can still be added and tokens issued, but browser tools will return a clear “not installed” error until the install finishes. Install downloads ~200MB once. Note: the binary needs a license key — if no key is saved on this laptop, finish the login in a terminal first (<code>npx cloakbrowser login</code>); the free key allows one browser session at a time.</p>
+    </div>
+
+    <div class="card">
+      <h2>Add a bot</h2>
+      <p class="muted">One bot = one isolated browser profile (own cookies, logins, storage) + one unique token. Give the token to that bot in hob and it can only ever act as itself.</p>
+      <div class="row">
+        <input id="botName" placeholder="Bot name, e.g. Dex" maxlength="50">
+        <input id="botDesc" placeholder="Description (optional)" maxlength="200" style="flex:1">
+        <button id="addBotBtn">Add bot + create token</button>
+      </div>
+      <p id="newToken" class="muted"></p>
+    </div>
+
+    <div class="card">
+      <h2>Bots</h2>
+      <div id="bots">Loading…</div>
+    </div>
+
+    <div class="card">
+      <h2>Connect a bot in hob</h2>
+      <p class="muted">In that bot's Hermes profile config, set the MCP server <code>agent_computer</code> to URL <code id="mcpUrl">http://&lt;tailscale-ip&gt;:9879/mcp</code> with header <code>Authorization: Bearer &lt;that bot's token&gt;</code>. Then ask the bot to run <code>computer_list</code> — it should see one computer, <b>Portal</b>. Each bot's browser profile, files and shell stay inside its own folder and no bot can name another bot's profile. Full steps are in the README.</p>
+    </div>
+
+    <div class="card">
+      <h2>Recent activity</h2>
+      <div id="audit" class="muted">Loading…</div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let ownerToken = sessionStorage.getItem('portal_owner') || '';
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    ...opts,
+    headers: { 'Authorization': 'Bearer ' + ownerToken, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  if (r.status === 401) { showLogin('Owner token was rejected. Check it and sign in again.'); throw new Error('unauthorized'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+function showLogin(msg) {
+  $('login').classList.remove('hidden'); $('app').classList.add('hidden');
+  $('conn').textContent = 'not signed in';
+  if (msg) $('loginErr').textContent = msg;
+}
+function showApp() {
+  $('login').classList.add('hidden'); $('app').classList.remove('hidden');
+  $('conn').textContent = 'signed in as owner';
+}
+async function refresh() {
+  try {
+    const s = await api('/api/ui/status');
+    $('mcpUrl').textContent = `http://${s.tailscaleIp || '<tailscale-ip>'}:${s.port}/mcp`;
+    $('status').innerHTML =
+      `<span class="dot ${s.browser.installed ? 'ok' : 'bad'}"></span> CloakBrowser: <b>${s.browser.installed ? 'installed' : 'NOT installed'}</b>` +
+      (s.browser.executable ? ` <code>${s.browser.executable}</code>` : '') +
+      `<br><span class="muted">Computer: ${s.computer.name} (${s.computer.id}) · ${s.profiles} profile(s) · uptime ${s.uptimeSec}s · v${s.version} · listening on ${s.host}:${s.port}</span>`;
+    const { bots } = await api('/api/ui/bots');
+    renderBots(bots);
+    const a = await api('/api/ui/audit');
+    $('audit').innerHTML = a.entries.length
+      ? '<pre>' + a.entries.slice(-20).reverse().map(e => `${new Date(e.at).toLocaleTimeString()}  ${e.kind || ''}  ${e.tool || ''}  ${e.token || ''}  ${e.profile || ''}`).join('\n') + '</pre>'
+      : 'No activity yet.';
+  } catch (e) {
+    if (e.message !== 'unauthorized') $('status').textContent = 'Error: ' + e.message;
+  }
+}
+function renderBots(bots) {
+  if (!bots.length) { $('bots').innerHTML = '<p class="muted">No bots yet. Add one above.</p>'; return; }
+  $('bots').innerHTML = '<table><tr><th>Bot</th><th>Browser</th><th>Tokens</th><th>Actions</th></tr>' +
+    bots.map(b => `<tr>
+      <td><b>${esc(b.name)}</b><br><span class="muted">${esc(b.slug)}${b.isDefault ? ' · default' : ''}</span><br><span class="muted">${esc(b.description || '')}</span></td>
+      <td><span class="dot ${b.browserStarted ? 'ok' : 'idle'}"></span> ${b.browserStarted ? 'running' : 'stopped'}${b.browserUrl ? `<br><code>${esc(b.browserUrl)}</code>` : ''}<br>
+        <button class="secondary" data-act="bstart" data-id="${b.slug}">Start</button>
+        <button class="secondary" data-act="bstop" data-id="${b.slug}">Close</button></td>
+      <td>${b.tokens.map(t => `<div><code>${esc(t.name)}</code> ${t.revoked ? '<b>REVOKED</b>' : ''}<br>
+        <button class="secondary" data-act="reveal" data-id="${t.id}">Show token</button>
+        ${t.revoked ? '' : `<button class="secondary" data-act="revoke" data-id="${t.id}">Revoke</button>`}
+        <span class="tok" id="tok-${t.id}"></span></div>`).join('')}</td>
+      <td>
+        <button class="secondary" data-act="newtok" data-id="${b.id}">New token</button>
+        <button class="secondary" data-act="rotate" data-id="${b.id}">Rotate (revoke old)</button>
+        <button class="danger" data-act="del" data-id="${b.id}" data-name="${esc(b.name)}">Delete bot</button>
+      </td></tr>`).join('') + '</table>';
+  $('bots').querySelectorAll('button').forEach(btn => btn.addEventListener('click', onBotAction));
+}
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function onBotAction(ev) {
+  const btn = ev.currentTarget, act = btn.dataset.act, id = btn.dataset.id;
+  btn.disabled = true;
+  try {
+    if (act === 'reveal') {
+      const j = await api(`/api/ui/bots/x/token/${id}/reveal`);
+      const el = $('tok-' + id);
+      el.innerHTML = ` <code>${esc(j.plaintext)}</code> <button class="secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(j.plaintext)});this.textContent='Copied'">Copy</button>`;
+    } else if (act === 'revoke') {
+      if (confirm('Revoke this token? The bot will lose access until it gets a new one.')) { await api(`/api/ui/bots/x/revoke/${id}`, { method: 'POST' }); await refresh(); }
+    } else if (act === 'newtok') {
+      const j = await api(`/api/ui/bots/${id}/token`, { method: 'POST' });
+      $('newToken').innerHTML = `New token for this bot — copy it now: <code>${esc(j.plaintext)}</code>`;
+      await refresh();
+    } else if (act === 'rotate') {
+      if (confirm('Rotate: create a new token and revoke ALL old tokens for this bot?')) {
+        const j = await api(`/api/ui/bots/${id}/rotate`, { method: 'POST' });
+        $('newToken').innerHTML = `Rotated. New token — copy it now: <code>${esc(j.plaintext)}</code>`;
+        await refresh();
+      }
+    } else if (act === 'del') {
+      if (confirm(`Delete bot "${btn.dataset.name}"? Its tokens are revoked. Its files on disk are NOT deleted automatically.`)) {
+        await api(`/api/ui/bots/${id}`, { method: 'DELETE' }); await refresh();
+      }
+    } else if (act === 'bstart' || act === 'bstop') {
+      await api(`/api/ui/browser/${id}/${act === 'bstart' ? 'start' : 'close'}`, { method: 'POST' });
+      await refresh();
+    }
+  } catch (e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+}
+$('signInBtn').addEventListener('click', async () => {
+  ownerToken = $('ownerToken').value.trim();
+  if (!ownerToken) return;
+  try { await api('/api/ui/status'); sessionStorage.setItem('portal_owner', ownerToken); showApp(); refresh(); }
+  catch (e) { if (e.message !== 'unauthorized') $('loginErr').textContent = e.message; }
+});
+$('addBotBtn').addEventListener('click', async () => {
+  const name = $('botName').value.trim();
+  if (!name) { alert('Give the bot a name.'); return; }
+  try {
+    const j = await api('/api/ui/bots', { method: 'POST', body: JSON.stringify({ name, description: $('botDesc').value.trim() }) });
+    $('newToken').innerHTML = `Bot <b>${esc(j.profile.name)}</b> created. Its token — copy it now, this is the token you give that bot in hob: <code>${esc(j.plaintext)}</code>`;
+    $('botName').value = ''; $('botDesc').value = '';
+    await refresh();
+  } catch (e) { alert('Error: ' + e.message); }
+});
+$('installBtn').addEventListener('click', async () => {
+  try {
+    const j = await api('/api/ui/install-browser', { method: 'POST' });
+    $('installState').textContent = 'Installing… (downloads ~200MB once)';
+    $('installLog').classList.remove('hidden');
+    const poll = setInterval(async () => {
+      try {
+        const s = await api(`/api/ui/install-browser/${j.id}`);
+        $('installLog').textContent = s.log.slice(-40).join('');
+        if (s.state !== 'running') {
+          clearInterval(poll);
+          $('installState').textContent = s.state === 'done' ? 'Install finished.' : 'Install FAILED — see log.';
+          await refresh();
+        }
+      } catch (e) { clearInterval(poll); }
+    }, 2000);
+  } catch (e) { alert('Error: ' + e.message); }
+});
+if (ownerToken) { showApp(); refresh(); } else { showLogin(''); }
+setInterval(() => { if (!$('app').classList.contains('hidden')) refresh(); }, 30000);
+</script>
+</body>
+</html>

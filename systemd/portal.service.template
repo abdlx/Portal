@@ -1,0 +1,18 @@
+[Unit]
+Description=Portal — one isolated browser per agent (MCP + panel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_DIR@
+ExecStart=/usr/bin/env node @APP_DIR@/src/server.mjs
+Environment=PORTAL_HOST=@HOST@
+Environment=PORTAL_PORT=@PORT@
+Environment=PORTAL_HOME=@DATA_HOME@
+Environment=PORTAL_TAILSCALE_IP=@TAILSCALE_IP@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
