@@ -212,6 +212,13 @@ export class Store {
       if (s !== p.slug && fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
         fs.renameSync(oldDir, newDir);
       }
+      // The stored browser fingerprint follows the slug too.
+      const oldFp = this.browserFingerprintPath(p.slug);
+      const newFp = this.browserFingerprintPath(s);
+      if (s !== p.slug && fs.existsSync(oldFp) && !fs.existsSync(newFp)) {
+        fs.mkdirSync(path.dirname(newFp), { recursive: true });
+        fs.renameSync(oldFp, newFp);
+      }
       p.slug = s;
       // Tokens bound to this profile follow the new slug.
       for (const t of this.data.tokens) {
@@ -313,6 +320,10 @@ export class Store {
 
   browserProfileDir(slug) {
     return path.join(this.profileHome(slug), "browser-profile");
+  }
+
+  browserFingerprintPath(slug) {
+    return path.join(this.home, "browser-fingerprints", `${slug}.json`);
   }
 }
 

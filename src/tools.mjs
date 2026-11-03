@@ -37,6 +37,14 @@ const COMPUTER_ARG = {
   },
 };
 
+const TAB_ARG = {
+  tab: {
+    type: "string",
+    description:
+      "Tab id (e.g. 'tab1') from browser_tab_list. Optional; defaults to the active tab. Tabs are always enabled — nothing disables them.",
+  },
+};
+
 function resolveComputer(ctx, arg) {
   const row = ctx.store.data.computer;
   if (ctx.token.computerId) {
@@ -238,38 +246,82 @@ export const TOOLS = [
   {
     name: "browser_start",
     scope: "browser",
-    description: "Start the persistent browser (CloakBrowser) for this profile. The profile (cookies, logins) persists across restarts.",
+    description: "Start the persistent browser (Camoufox) for this profile. The profile (cookies, logins) persists across restarts.",
     inputSchema: obj({ ...COMPUTER_ARG }),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
       await ctx.browser.ensure(profile);
       const st = await ctx.browser.status(profile);
-      return text({ started: true, profile: profile.slug, url: st.url });
+      return text({ started: true, profile: profile.slug, url: st.url, activeTab: st.activeTab, tabs: st.tabs });
     },
   },
   {
     name: "browser_navigate",
     scope: "browser",
-    description: "Navigate the browser to a URL.",
-    inputSchema: obj({ ...COMPUTER_ARG, url: { type: "string" } }, ["url"]),
+    description: "Navigate the browser to a URL. Pass newTab: true to open it in a new tab (tabs are always enabled).",
+    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG, url: { type: "string" }, newTab: { type: "boolean" } }, ["url"]),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      return text(await ctx.browser.navigate(profile, args.url));
+      return text(await ctx.browser.navigate(profile, args.url, { tab: args.tab, newTab: args.newTab }));
+    },
+  },
+  {
+    name: "browser_tab_new",
+    scope: "browser",
+    description: "Open a new tab in this profile's browser and switch to it. Optionally navigate it to a URL. Returns the new tab id.",
+    inputSchema: obj({ ...COMPUTER_ARG, url: { type: "string" } }),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      return text(await ctx.browser.newTab(profile, args.url));
+    },
+  },
+  {
+    name: "browser_tab_list",
+    scope: "browser",
+    description: "List the open tabs in this profile's browser (id, URL, title) and which tab is active. Returns no tabs without starting the browser.",
+    inputSchema: obj({ ...COMPUTER_ARG }),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      return text(await ctx.browser.listTabs(profile));
+    },
+  },
+  {
+    name: "browser_tab_switch",
+    scope: "browser",
+    description: "Switch to a tab by its id from browser_tab_list. Snapshot refs belong to the tab that was snapshotted.",
+    inputSchema: obj({ ...COMPUTER_ARG, tab: { type: "string" } }, ["tab"]),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      return text(await ctx.browser.switchTab(profile, args.tab));
+    },
+  },
+  {
+    name: "browser_tab_close",
+    scope: "browser",
+    description: "Close a tab by its id. Closing the active tab activates the most recent remaining tab. The browser keeps running with zero tabs until the next navigation.",
+    inputSchema: obj({ ...COMPUTER_ARG, tab: { type: "string" } }, ["tab"]),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      return text(await ctx.browser.closeTab(profile, args.tab));
     },
   },
   {
     name: "browser_snapshot",
     scope: "browser",
     description: "Accessibility snapshot of the page: interactive elements with refs (e1, e2, …) to use with browser_click / browser_fill.",
-    inputSchema: obj({ ...COMPUTER_ARG }),
+    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG }),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const snap = await ctx.browser.snapshot(profile);
+      const snap = await ctx.browser.snapshot(profile, args.tab);
       return text(
-        `URL: ${snap.url}\nTitle: ${snap.title}\n\n${snap.elements || "(no interactive elements found)"}`,
+        `URL: ${snap.url}\nTitle: ${snap.title}\nTab: ${snap.tab}\n\n${snap.elements || "(no interactive elements found)"}`,
       );
     },
   },
@@ -277,11 +329,11 @@ export const TOOLS = [
     name: "browser_click",
     scope: "browser",
     description: "Click an element by its snapshot ref.",
-    inputSchema: obj({ ...COMPUTER_ARG, ref: { type: "string" } }, ["ref"]),
+    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG, ref: { type: "string" } }, ["ref"]),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      return text(await ctx.browser.click(profile, args.ref));
+      return text(await ctx.browser.click(profile, args.ref, args.tab));
     },
   },
   {
@@ -289,36 +341,36 @@ export const TOOLS = [
     scope: "browser",
     description: "Fill a text field (by snapshot ref) with text.",
     inputSchema: obj(
-      { ...COMPUTER_ARG, ref: { type: "string" }, text: { type: "string" } },
+      { ...COMPUTER_ARG, ...TAB_ARG, ref: { type: "string" }, text: { type: "string" } },
       ["ref", "text"],
     ),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      return text(await ctx.browser.fill(profile, args.ref, args.text));
+      return text(await ctx.browser.fill(profile, args.ref, args.text, args.tab));
     },
   },
   {
     name: "browser_press",
     scope: "browser",
     description: "Press a key in the page, e.g. 'Enter', 'Tab', 'Escape'.",
-    inputSchema: obj({ ...COMPUTER_ARG, key: { type: "string" } }, ["key"]),
+    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG, key: { type: "string" } }, ["key"]),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      return text(await ctx.browser.press(profile, args.key));
+      return text(await ctx.browser.press(profile, args.key, args.tab));
     },
   },
   {
     name: "browser_content",
     scope: "browser",
     description: "The page's visible text content and title.",
-    inputSchema: obj({ ...COMPUTER_ARG }),
+    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG }),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const c = await ctx.browser.content(profile);
-      return text(`URL: ${c.url}\nTitle: ${c.title}\n\n${c.text}`);
+      const c = await ctx.browser.content(profile, args.tab);
+      return text(`URL: ${c.url}\nTitle: ${c.title}\nTab: ${c.tab}\n\n${c.text}`);
     },
   },
   {

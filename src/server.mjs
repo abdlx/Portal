@@ -324,7 +324,23 @@ async function handleUiApi(req, res, token, parts) {
       });
       const { token: tok, plaintext } = store.newBotToken(profile);
       store.audit({ kind: "ui.create-bot", profile: profile.slug });
-      sendJson(res, 201, { profile, token: store.tokenPublic(tok), plaintext });
+      // The bot's isolated browser profile (directory + pinned fingerprint)
+      // is created NOW, in the same request — no manual step, no waiting
+      // for the first browser launch. If the fingerprint model is
+      // unreachable, preparation reports not-ready and the first
+      // browser_start draws it lazily instead; bot creation never fails
+      // on preparation.
+      let browserProfile;
+      try {
+        browserProfile = { ready: true, ...(await browser.prepare(profile)) };
+      } catch (e) {
+        browserProfile = {
+          ready: false,
+          browserProfileDir: store.browserProfileDir(profile.slug),
+          error: e.message,
+        };
+      }
+      sendJson(res, 201, { profile, token: store.tokenPublic(tok), plaintext, browserProfile });
       return;
     }
     if (req.method === "POST" && seg.length === 3 && seg[0] === "bots" && seg[2] === "token") {
@@ -412,7 +428,7 @@ async function handleUiApi(req, res, token, parts) {
       const job = { id, state: "running", startedAt: Date.now(), log: [] };
       installJobs.set(id, job);
       const out = fs.createWriteStream(logFile, { flags: "a" });
-      const child = spawn("bash", ["-lc", "npm install && npx cloakbrowser install"], {
+      const child = spawn("bash", ["-lc", "npm install && npx camoufox fetch"], {
         cwd: APP_DIR,
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],

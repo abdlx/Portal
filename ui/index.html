@@ -49,11 +49,11 @@
       <h2>Status</h2>
       <div id="status">Loading…</div>
       <div class="row" style="margin-top:10px">
-        <button id="installBtn">Install / repair CloakBrowser</button>
+        <button id="installBtn">Install / repair Camoufox</button>
         <span id="installState" class="muted"></span>
       </div>
       <pre id="installLog" class="hidden"></pre>
-      <p class="muted">CloakBrowser is the stealth engine. If it is not installed, bots can still be added and tokens issued, but browser tools will return a clear “not installed” error until the install finishes. Install downloads ~200MB once. Note: the binary needs a license key — if no key is saved on this laptop, finish the login in a terminal first (<code>npx cloakbrowser login</code>); the free key allows one browser session at a time.</p>
+      <p class="muted">Camoufox is the stealth engine (patched Firefox, free, no key). If it is not installed, bots can still be added and tokens issued, but browser tools will return a clear “not installed” error until the install finishes. Install downloads the browser build once. On a minimal server it also needs three system libraries (libgtk-3, libx11-xcb, libasound2) — if the install log complains about a missing .so file, install those with apt and retry.</p>
     </div>
 
     <div class="card">
@@ -110,7 +110,7 @@ async function refresh() {
     const s = await api('/api/ui/status');
     $('mcpUrl').textContent = `http://${s.tailscaleIp || '<tailscale-ip>'}:${s.port}/mcp`;
     $('status').innerHTML =
-      `<span class="dot ${s.browser.installed ? 'ok' : 'bad'}"></span> CloakBrowser: <b>${s.browser.installed ? 'installed' : 'NOT installed'}</b>` +
+      `<span class="dot ${s.browser.installed ? 'ok' : 'bad'}"></span> Camoufox: <b>${s.browser.installed ? 'installed' : 'NOT installed'}</b>` +
       (s.browser.executable ? ` <code>${s.browser.executable}</code>` : '') +
       `<br><span class="muted">Computer: ${s.computer.name} (${s.computer.id}) · ${s.profiles} profile(s) · uptime ${s.uptimeSec}s · v${s.version} · listening on ${s.host}:${s.port}</span>`;
     const { bots } = await api('/api/ui/bots');

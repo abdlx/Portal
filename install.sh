@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Portal installer — run ON THE LAPTOP:  ./install.sh
-# Installs npm dependencies (including CloakBrowser), writes a systemd
+# Installs npm dependencies (including Camoufox), writes a systemd
 # user service, and creates a desktop app entry that opens the control
 # panel. Nothing is exposed to the public internet: the server binds the
 # Tailscale IP if Tailscale is present, otherwise localhost only.
@@ -32,64 +32,56 @@ DATA_HOME="${PORTAL_HOME:-$HOME/.portal}"
 echo "== Portal installer =="
 echo "App dir: $APP_DIR"
 
-# --- Node.js 20+ required (never auto-installs system packages) -----------
+# --- Node.js 22.15+ required (never auto-installs system packages) --------
 if ! command -v node >/dev/null 2>&1; then
-  echo "ERROR: Node.js is not installed. Install Node 20+ first, then re-run:"
-  echo "  Debian/Ubuntu: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+  echo "ERROR: Node.js is not installed. Install Node 22+ first, then re-run:"
+  echo "  Debian/Ubuntu: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs"
   echo "  Fedora:        sudo dnf install -y nodejs"
   echo "  Arch:          sudo pacman -S nodejs npm"
   exit 1
 fi
 NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  echo "ERROR: Node.js $NODE_MAJOR found; Node 20+ is required. Upgrade Node, then re-run."
+NODE_MINOR="$(node -p "process.versions.node.split('.')[1]")"
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 15 ]; }; then
+  echo "ERROR: Node.js $NODE_MAJOR.$NODE_MINOR found; Node 22.15+ is required (Camoufox needs it). Upgrade Node, then re-run."
   exit 1
 fi
 command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is not installed (it ships with Node). Reinstall Node, then re-run."; exit 1; }
 echo "Node $(node -v), npm $(npm -v)"
 
-# --- Dependencies (CloakBrowser downloads its ~200MB binary here) ---------
+# --- Dependencies ------------------------------------------------------------
 echo "Installing dependencies…"
 cd "$APP_DIR"
 if ! npm install --no-audit --no-fund; then
   echo "WARNING: npm install failed. The server will still start, and the"
-  echo "desktop panel's Install button can retry the CloakBrowser install."
+  echo "desktop panel's Install button can retry the Camoufox install."
 fi
 
-# --- CloakBrowser binary + license key --------------------------------------
-# The wrapper is MIT, but the stealth binary needs a key from
-# cloakbrowser.dev. A free key allows the latest binary with ONE
-# concurrent browser session; a Pro key lifts that limit. If
-# CLOAKBROWSER_LICENSE_KEY is set in the install shell, it is saved to
-# a 0600 env file the service reads (never printed, never committed).
-# Otherwise `npx cloakbrowser install` may ask for a key interactively
-# (email for a free key, or paste one) — that needs a human at a
-# terminal, so it runs in the foreground here, not headless.
-if [ -n "${CLOAKBROWSER_LICENSE_KEY:-}" ]; then
-  printf 'CLOAKBROWSER_LICENSE_KEY=%s\n' "$CLOAKBROWSER_LICENSE_KEY" > "$DATA_HOME/.env"
-  chmod 600 "$DATA_HOME/.env"
-  echo "License key saved to $DATA_HOME/.env (0600). It is not printed anywhere."
-else
-  echo "CloakBrowser needs a license key (free key = one browser session at a time)."
-  echo "The next step may ask you to choose: get a free key by email, or paste a key."
-  echo "If you already have one, re-run with:  CLOAKBROWSER_LICENSE_KEY='<key>' ./install.sh"
-fi
-echo "Downloading the CloakBrowser binary (~200MB, once)…"
-# From a pipe (the one-line install), stdin is the script itself and no
-# interactive key prompt can work — run non-interactively and let the
-# manual login step below finish the job if it fails.
+# --- Camoufox browser + system libraries ------------------------------------
+# Camoufox (patched Firefox, MPL-2.0) is free: no key, no activation.
+# `npx camoufox fetch` downloads the paired browser build once. Firefox
+# also needs three system libraries even headless; try a passwordless
+# sudo install, otherwise print the command for the owner.
+echo "Downloading the Camoufox browser build (once)…"
 if [ -t 0 ]; then
-  INSTALL_OK=1; npx cloakbrowser install || INSTALL_OK=0
+  FETCH_OK=1; npx camoufox fetch || FETCH_OK=0
 else
-  echo "Non-interactive run: the license-key prompt is skipped here."
-  echo "If this step fails, finish it by hand (see below) — the panel's Install button retries it too."
-  INSTALL_OK=1; npx cloakbrowser install </dev/null || INSTALL_OK=0
+  FETCH_OK=1; npx camoufox fetch </dev/null || FETCH_OK=0
 fi
-if [ "$INSTALL_OK" = "0" ]; then
-  echo "WARNING: 'npx cloakbrowser install' did not complete. Finish it by hand:"
-  echo "  npx cloakbrowser login     # get/paste a key (needs a terminal)"
-  echo "  npx cloakbrowser install"
+if [ "$FETCH_OK" = "0" ]; then
+  echo "WARNING: 'npx camoufox fetch' did not complete. Finish it by hand:"
+  echo "  npx camoufox fetch"
   echo "Then restart the service: systemctl --user restart portal.service"
+fi
+echo "Checking Camoufox's system libraries…"
+if command -v apt-get >/dev/null 2>&1; then
+  if sudo -n true 2>/dev/null; then
+    sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64 || echo "WARNING: library install failed — run the apt command below by hand."
+  else
+    echo "NOTE: passwordless sudo is not available, so the libraries were not installed."
+    echo "If the browser fails to start with a missing .so error, run:"
+    echo "  sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64"
+  fi
 fi
 
 # --- Bind address: Tailscale IP when present, localhost otherwise ----------
@@ -148,7 +140,7 @@ DESKTOP_FILE="$HOME/.local/share/applications/portal.desktop"
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Name=Portal
-Comment=Add bots, issue per-bot tokens, manage isolated CloakBrowser profiles
+Comment=Add bots, issue per-bot tokens, manage isolated Camoufox profiles
 Exec=xdg-open http://127.0.0.1:$PORT/ui/
 Icon=$HOME/.local/share/icons/portal.svg
 Terminal=false

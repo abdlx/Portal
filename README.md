@@ -2,7 +2,7 @@
 
 **Your agents live in hob. Portal is the doorway they step through.**
 
-Portal turns a spare Linux laptop into an agent computer: one computer, one isolated stealth-browser profile per bot, each bot with its own token. It speaks the same MCP + REST surface as Agent Computer (`computer_list`, `browser_*`, `fs_*`, `terminal_exec`, `batch`, `profile_*`), so any agent host that already talks to Agent Computer — hob included — connects with a URL + token and drives the laptop's browser. The browser is CloakBrowser, a patched Chromium built to avoid bot detection, and every bot's cookies, logins, and files stay in its own folder on the laptop.
+Portal turns a spare Linux laptop into an agent computer: one computer, one isolated stealth-browser profile per bot, each bot with its own token. It speaks the same MCP + REST surface as Agent Computer (`computer_list`, `browser_*`, `fs_*`, `terminal_exec`, `batch`, `profile_*`), so any agent host that already talks to Agent Computer — hob included — connects with a URL + token and drives the laptop's browser. The browser is Camoufox, a patched Firefox built to avoid bot detection, driven through Playwright (Firefox's Juggler protocol — Mozilla removed CDP from Firefox in version 141, so there is no CDP endpoint here). Every bot's cookies, logins, and files stay in its own folder on the laptop, and each bot gets one pinned fingerprint identity, drawn once and replayed on every launch.
 
 ## Install — one line
 
@@ -12,9 +12,9 @@ Run this on the laptop:
 curl -fsSL https://raw.githubusercontent.com/abdlx/Portal/main/install.sh | bash
 ```
 
-What it does: clones Portal into `~/portal` (or reuses the checkout if you run it from one), installs npm dependencies, downloads the CloakBrowser binary (~200 MB, once), writes a systemd user service, and creates a **Portal** desktop app that opens the control panel. It never installs system packages and never exposes the server to the public internet: it binds the Tailscale IP when Tailscale is present, otherwise localhost only.
+What it does: clones Portal into `~/portal` (or reuses the checkout if you run it from one), installs npm dependencies, downloads the Camoufox browser build (once), writes a systemd user service, and creates a **Portal** desktop app that opens the control panel. It never exposes the server to the public internet: it binds the Tailscale IP when Tailscale is present, otherwise localhost only. Camoufox also needs three system libraries even headless (`libgtk-3`, `libx11-xcb`, `libasound2`) — the installer tries a passwordless sudo install and otherwise prints the apt command.
 
-Requirements: Linux (Debian/Ubuntu, Fedora, or Arch), Node.js 20+, git, and Tailscale on the same tailnet as the machine your agents run on (so they can reach the laptop).
+Requirements: Linux (Debian/Ubuntu, Fedora, or Arch), Node.js 22.15+, git, and Tailscale on the same tailnet as the machine your agents run on (so they can reach the laptop).
 
 Manual install:
 
@@ -28,17 +28,9 @@ If `./install.sh` says "permission denied", run `bash install.sh` — file modes
 
 ## After install
 
-1. **License key.** CloakBrowser's wrapper is MIT, but the stealth binary needs a key from cloakbrowser.dev. In a terminal on the laptop:
-
-   ```sh
-   npx cloakbrowser login   # free key by email, or paste a Pro key
-   npx cloakbrowser install
-   systemctl --user restart portal.service
-   ```
-
-   The free key runs the latest binary with **one browser session at a time** — starting one bot's browser closes any other bot's running browser first (profiles persist on disk, so only the live page is lost). A Pro key lifts that limit. Vendor detection claims are unverified; test on a disposable account first.
+1. **Browser engine.** Camoufox is free software (wrapper MIT, browser MPL-2.0) — no key, no activation, no session limit. If the install step above reported a failure, run `npx camoufox fetch` in the app directory, then `systemctl --user restart portal.service`. If the browser fails to start with a missing `.so` error, install the libraries: `sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64`. Vendor detection claims are unverified; test on a disposable account first. Note the engine is Firefox: sites that key on Chromium identity will see Firefox, which is the point of a second engine, not a drop-in replacement for every site.
 2. **Open the Portal desktop app** and sign in with the owner token in `~/.portal/owner-token.txt` (0600, laptop only — never paste it into an agent or a chat).
-3. **Add a bot** (e.g. `Dex`). The panel creates the bot's profile folder + browser profile and shows its token once — copy it. It can be revealed again any time from the panel, owner only.
+3. **Add a bot** (e.g. `Dex`). The panel creates the bot's profile folder, its isolated browser profile directory, and its pinned fingerprint identity immediately — no manual step, no waiting for the first launch. It shows its token once — copy it. It can be revealed again any time from the panel, owner only.
 4. **Connect the bot.** In that bot's agent-host config, add an MCP server named `agent_computer` with URL `http://<laptop-tailscale-ip>:9879/mcp` and header `Authorization: Bearer <that-bot's-token>`. Then ask the bot to run `computer_list` — it should see one computer, **Portal**. Prove it with one `batch`: navigate + snapshot + content. Repeat after 30 minutes to prove the laptop stays awake.
 5. **Keep the laptop awake and plugged in.** There is no wake-on-call. Recommended (printed by the installer, never automatic): mask sleep/suspend, `loginctl enable-linger`, and a firewall rule allowing only `100.64.0.0/10` to port 9879.
 
@@ -50,14 +42,15 @@ Deleting a bot revokes its tokens. Its files on disk are never deleted automatic
 - **REST fallback** (`GET /api/computers`, `GET /api/computers/:id`, `POST /api/computers/:id/wake|sleep`) with the same Bearer auth.
 - **21 tools**: `computer_list/status/wake/sleep`, `profile_list`, `profile_current`, `browser_start/navigate/snapshot/click/fill/press/content/close`, `fs_list/read/write/mkdir/delete`, `terminal_exec`, `batch` (1–50 steps, stops on first error unless `stopOnError: false`, no nested batch, no admin tools inside). Desktop/mouse/keyboard/screenshot tools are deliberately not listed — this is a browser computer.
 - **Isolation**: each bot's browser profile, files, and shell live under `~/.portal/profiles/<slug>/`. A profile-bound token naming another profile is rejected before any work happens (fail-closed, including inside `batch`). Filesystem paths cannot escape the profile home (symlinks resolved). Rate limit: 600 calls/min per token (429, `-32029`).
-- **Browser**: CloakBrowser via the wrapper's `launchPersistentContext` with `humanize: true`, one fixed `--fingerprint` seed per bot, timezone Asia/Karachi, locale en-US. No JavaScript injection, no UA overrides.
-- **Control panel** (`/ui/`): owner-only. Status, CloakBrowser install/repair, bot + token management, recent activity from the audit log.
+- **Browser**: Camoufox via the `camoufox` package's `Camoufox()` (persistent context) with `humanize: true`, one pinned fpgen fingerprint per bot (drawn once, stored under `~/.portal/browser-fingerprints/`, replayed every launch), timezone Asia/Karachi, locale en-US. No JavaScript injection, no UA overrides. No license limit on concurrent browsers — RAM is the limit.
+- **Tabs**: always enabled, never disabled. Every profile's browser can hold many tabs: `browser_tab_new/list/switch/close`, `browser_navigate` with `newTab: true`, and a `tab` argument on navigate/snapshot/click/fill/press/content. Snapshot refs belong to the tab that was snapshotted.
+- **Control panel** (`/ui/`): owner-only. Status, Camoufox install/repair, bot + token management, recent activity from the audit log.
 
 ## What it does NOT do
 
 - No VNC / live desktop view.
 - No wake-on-call, no leases, no human-takeover arbitration.
-- No CAPTCHA solving. CloakBrowser aims to prevent challenges, not solve them.
+- No CAPTCHA solving. Camoufox aims to prevent challenges, not solve them.
 - No proxy rotation — the home IP is the point.
 - No token expiry (same as Agent Computer): revocation + rate limit are the controls. Rotate tokens from the panel when one leaks.
 
@@ -70,9 +63,8 @@ Deleting a bot revokes its tokens. Its files on disk are never deleted automatic
 ## Troubleshooting
 
 - `401 unauthorized`: wrong/missing Bearer token, or the token was revoked. Reveal a fresh token in the panel (or rotate).
-- Browser tools return "CloakBrowser is not installed": press Install in the panel, or run `npx cloakbrowser install` in the app dir, then restart the service (`systemctl --user restart portal.service`).
-- License error: run `npx cloakbrowser login` in a terminal on the laptop, then restart the service.
-- A site blocks the laptop browser: route that work to Camoufox via Agent Computer. The laptop is the fast path, not a stealth guarantee.
+- Browser tools return "Camoufox is not installed": press Install in the panel, or run `npx camoufox fetch` in the app dir, then restart the service (`systemctl --user restart portal.service`). If the error names a missing `.so` file, install the system libraries (see step 1 above).
+- A site blocks the laptop browser: route that work to Agent Computer's Camoufox, or accept the block — the laptop is the fast path, not a stealth guarantee.
 - `computer_list` shows the wrong computer: check which config file the agent host actually read — a global MCP entry can shadow a per-bot one.
 - Logs: `journalctl --user -u portal.service -f`
 - Port already in use: set `PORTAL_PORT` and re-run install.
@@ -80,7 +72,7 @@ Deleting a bot revokes its tokens. Its files on disk are never deleted automatic
 
 ## Tests
 
-`npm test` runs `test/smoke.mjs`: boots the server on a scratch home and checks health, 401s, owner/bot creation, MCP initialize/list/call (including bare `tools/call` without initialize), profile-binding rejection, batch, fs confinement, `terminal_exec`, REST fallback, and the rate limiter. Browser tools are expected to return the clear not-installed error when CloakBrowser is absent.
+`npm test` runs `test/smoke.mjs`: boots the server on a scratch home and checks health, 401s, owner/bot creation, MCP initialize/list/call (including bare `tools/call` without initialize), profile-binding rejection, batch, fs confinement, `terminal_exec`, REST fallback, and the rate limiter. Browser tools return the clear not-installed error when Camoufox is absent.
 
 ## Uninstall
 

@@ -1,8 +1,8 @@
 // Smoke test for portal. Boots the real server on a scratch
 // home dir and a scratch port, then checks the contract hob depends on.
-// Browser tools are expected to fail cleanly when CloakBrowser is absent
-// (the VM has no CloakBrowser unless installed); that failure message
-// itself is asserted. Exit 0 = all pass, 1 = any fail.
+// Browser tools use the real Camoufox engine when installed; when it is
+// absent they must fail cleanly with the not-installed message, which is
+// itself asserted. Exit 0 = all pass, 1 = any fail.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -80,6 +80,8 @@ try {
   check("panel creates bot Dex", mk.status === 201 && mkJson.profile?.slug === "dex", JSON.stringify(mkJson).slice(0, 200));
   const dexToken = mkJson.plaintext;
   check("bot token issued", typeof dexToken === "string" && dexToken.startsWith("portal_"));
+  check("bot creation auto-creates browser profile", typeof mkJson.browserProfile?.browserProfileDir === "string" && typeof mkJson.browserProfile?.ready === "boolean", JSON.stringify(mkJson.browserProfile));
+  check("browser profile dir exists on disk", fs.existsSync(path.join(HOME, "profiles", "dex", "browser-profile")));
 
   // 3. initialize + tools/list (scope filtering: no admin tools for bot)
   const init = await rpc(dexToken, { jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2025-03-26" } });
@@ -144,16 +146,37 @@ try {
   });
   check("REST wake returns ready", (await wake.json()).state === "ready");
 
-  // 11. Browser tools fail CLEANLY without CloakBrowser (or work if present)
+  // 11. Browser tools: real Camoufox launch when installed, clean error when not
   const bs = await call(dexToken, "browser_snapshot");
   const bsText = bs.json.result.content[0].text;
+  const browserAvailable = bs.json.result.isError !== true;
   check(
     "browser_snapshot: installed works, missing errors clearly",
-    bs.json.result.isError === true
-      ? /not installed|license key/i.test(bsText)
-      : /URL:/.test(bsText),
+    browserAvailable ? /URL:/.test(bsText) : /not installed/i.test(bsText),
     bsText.slice(0, 120),
   );
+
+  // 12. Multiple tabs (only when the browser is installed)
+  if (browserAvailable) {
+    const t2 = await call(dexToken, "browser_tab_new", { url: "data:text/html,<h1>Tab Two</h1>" });
+    const t2Json = JSON.parse(t2.json.result.content[0].text);
+    check("browser_tab_new opens tab2", t2Json.tab === "tab2", JSON.stringify(t2Json).slice(0, 120));
+    const tl = await call(dexToken, "browser_tab_list");
+    const tlJson = JSON.parse(tl.json.result.content[0].text);
+    check("browser_tab_list shows 2 tabs, tab2 active", tlJson.tabs.length === 2 && tlJson.activeTab === "tab2", JSON.stringify(tlJson).slice(0, 160));
+    const sw = await call(dexToken, "browser_tab_switch", { tab: "tab1" });
+    check("browser_tab_switch returns to tab1", JSON.parse(sw.json.result.content[0].text).tab === "tab1");
+    const nt = await call(dexToken, "browser_navigate", { url: "data:text/html,<h1>Tab Three</h1>", newTab: true });
+    const ntJson = JSON.parse(nt.json.result.content[0].text);
+    check("browser_navigate newTab opens a tab", typeof ntJson.tab === "string" && ntJson.tab !== "tab1", JSON.stringify(ntJson).slice(0, 120));
+    const cl = await call(dexToken, "browser_tab_close", { tab: ntJson.tab });
+    check("browser_tab_close closes the new tab", JSON.parse(cl.json.result.content[0].text).closed === true);
+    const tl2 = await call(dexToken, "browser_tab_list");
+    const tl2Json = JSON.parse(tl2.json.result.content[0].text);
+    check("tab3 closed, tab1 + tab2 remain", tl2Json.tabs.length === 2 && tl2Json.tabs.some((t) => t.tab === "tab1") && tl2Json.tabs.some((t) => t.tab === "tab2"), JSON.stringify(tl2Json).slice(0, 160));
+  } else {
+    console.log("SKIP tab checks — browser not installed");
+  }
 
   // 12. Revoked token -> 401 everywhere
   const bots = await fetch(`${BASE}/api/ui/bots`, { headers: { authorization: `Bearer ${ownerToken}` } });
