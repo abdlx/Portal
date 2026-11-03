@@ -31,6 +31,7 @@
 // at once is now a RAM question, not a license one.
 import fs from "node:fs";
 import path from "node:path";
+import { startDisplay, stopDisplay, VIEW_WIDTH, VIEW_HEIGHT } from "./vnc.mjs";
 
 const MISSING_MSG =
   "Camoufox is not installed yet. Run `npx camoufox fetch` in the app directory (downloads the browser build once), or press Install / repair Camoufox in the Portal panel, then try again.";
@@ -360,18 +361,36 @@ export class BrowserManager {
     });
   }
 
-  async ensure(profile) {
+  // A headed browser is a superset of a headless one: every MCP tool
+  // works identically on a headed page, so a running headed browser
+  // satisfies a headless request. The reverse is not true — a viewer
+  // needs pixels, so a headless browser is closed and relaunched headed
+  // (the on-disk profile, cookies and logins survive the relaunch).
+  async ensure(profile, opts = {}) {
     const slug = profile.slug;
     const existing = this.contexts.get(slug);
-    if (existing?.context) return existing;
+    if (existing?.context) {
+      if (opts.headed && !existing.headed) {
+        await this.close(profile);
+      } else {
+        return existing;
+      }
+    }
     if (this.starting.has(slug)) return this.starting.get(slug);
-    const p = this.#start(profile);
+    const p = this.#start(profile, opts);
     this.starting.set(slug, p);
     try {
       return await p;
     } finally {
       this.starting.delete(slug);
     }
+  }
+
+  // Ensure the browser runs headed inside its Xvnc display, for live
+  // viewing. Returns the display info the VNC proxy needs.
+  async ensureHeaded(profile) {
+    const entry = await this.ensure(profile, { headed: true });
+    return { display: entry.display.display, port: entry.display.port, profile: profile.slug, headed: true };
   }
 
   async #fingerprint(profile, loaders) {
@@ -390,17 +409,25 @@ export class BrowserManager {
     return fp;
   }
 
-  async #start(profile) {
+  async #start(profile, opts = {}) {
     const loaders = await loadLoaders();
     const userDataDir = this.store.browserProfileDir(profile.slug);
     fs.mkdirSync(userDataDir, { recursive: true });
     const fingerprint = await this.#fingerprint(profile, loaders);
+    // Headed mode (live viewer): the browser draws into the profile's
+    // own Xvnc display. Headless stays the default for plain MCP work:
+    // lighter, and nothing needs pixels until a viewer connects.
+    let display = null;
+    if (opts.headed) {
+      display = await startDisplay(profile.slug);
+    }
     let context;
     try {
       context = await loaders.camoufox.Camoufox({
         persistent_context: true,
         user_data_dir: userDataDir,
-        headless: true,
+        headless: opts.headed ? false : true,
+        ...(opts.headed ? { window: [VIEW_WIDTH, VIEW_HEIGHT], env: { DISPLAY: `:${display.display}` } } : {}),
         os: "linux",
         locale: "en-US",
         fingerprint,
@@ -409,16 +436,17 @@ export class BrowserManager {
         // this silences Camoufox's "not recommended" LeakWarning.
         i_know_what_im_doing: true,
         timezoneId: "Asia/Karachi",
-        viewport: { width: 1280, height: 800 },
+        viewport: { width: VIEW_WIDTH, height: VIEW_HEIGHT },
         ...(process.env.CAMOUFOX_EXECUTABLE
           ? { executable_path: process.env.CAMOUFOX_EXECUTABLE }
           : {}),
       });
     } catch (e) {
+      if (display) await stopDisplay(profile.slug);
       throw new Error(explainLaunchError(e));
     }
     const page = context.pages()[0] || (await context.newPage());
-    const entry = { context, page, refs: new Map(), chain: Promise.resolve(), tabs: new Map(), tabCounter: 0, active: page, refMaps: new Map() };
+    const entry = { context, page, refs: new Map(), chain: Promise.resolve(), tabs: new Map(), tabCounter: 0, active: page, refMaps: new Map(), headed: !!opts.headed, display };
     this.contexts.set(profile.slug, entry);
     const firstTab = this.#tabIdFor(entry, page);
     entry.refMaps.set(firstTab, entry.refs);
@@ -437,6 +465,7 @@ export class BrowserManager {
         url: e.page ? e.page.url() : null,
         activeTab: e.active ? e.tabs.get(e.active) : null,
         tabs,
+        headed: !!e.headed,
       };
     } catch {
       return { started: true, profile: profile.slug, url: null };
@@ -453,6 +482,10 @@ export class BrowserManager {
       }
     }
     this.contexts.delete(profile.slug);
+    // The display belongs to the browser session: no browser, no view.
+    // Awaited: a lingering Xvnc would hold its display number and
+    // poison the next allocation (see vnc.mjs).
+    await stopDisplay(profile.slug);
     return { closed: true, profile: profile.slug };
   }
 

@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import WebSocket from "ws";
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "lc-smoke-"));
 const PORT = 19879;
@@ -177,6 +178,29 @@ try {
   } else {
     console.log("SKIP tab checks — browser not installed");
   }
+
+  // 11b. Live viewer surface: upgrade without a token -> 401, the
+  // viewer page and the noVNC client serve. The full RFB handshake,
+  // frames and input are covered by the VNC probe; smoke stays
+  // host-independent and needs no Xvnc.
+  const upgradeStatus = (url) =>
+    new Promise((resolve) => {
+      const ws = new WebSocket(url, ["binary"]);
+      ws.once("open", () => {
+        ws.close();
+        resolve("open");
+      });
+      ws.once("unexpected-response", (_req, res) => resolve(`HTTP ${res.statusCode}`));
+      ws.once("error", (e) => resolve(`ERR ${e.message}`));
+    });
+  check(
+    "VNC upgrade without token is 401",
+    (await upgradeStatus(`ws://127.0.0.1:${PORT}/api/computers/portal/vnc`)) === "HTTP 401",
+  );
+  const viewRes = await fetch(`${BASE}/ui/view`);
+  check("viewer page serves with RFB import", viewRes.ok && (await viewRes.text()).includes("/novnc/core/rfb.js"));
+  const rfbRes = await fetch(`${BASE}/novnc/core/rfb.js`);
+  check("noVNC rfb.js serves", rfbRes.ok && (await rfbRes.text()).includes("class RFB"));
 
   // 12. Revoked token -> 401 everywhere
   const bots = await fetch(`${BASE}/api/ui/bots`, { headers: { authorization: `Bearer ${ownerToken}` } });

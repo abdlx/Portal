@@ -253,7 +253,7 @@ export const TOOLS = [
       const profile = effectiveProfile(ctx, args);
       await ctx.browser.ensure(profile);
       const st = await ctx.browser.status(profile);
-      return text({ started: true, profile: profile.slug, url: st.url, activeTab: st.activeTab, tabs: st.tabs });
+      return text({ started: true, profile: profile.slug, url: st.url, activeTab: st.activeTab, tabs: st.tabs, headed: st.headed });
     },
   },
   {

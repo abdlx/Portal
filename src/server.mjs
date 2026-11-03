@@ -5,7 +5,13 @@
 //                        panel sends it)
 //   GET  /api/computers, GET /api/computers/:id,
 //   POST /api/computers/:id/wake|sleep   (REST fallback, same Bearer auth)
+//   GET  /api/computers/:id/vnc   WebSocket upgrade, RFB byte pipe to the
+//                        profile's Xvnc display (same endpoint and bindings
+//                        as Agent Computer: Bearer header or ?token=, the
+//                        noVNC client speaks RFB over it with the 'binary'
+//                        subprotocol)
 //   GET  /ui/            desktop control panel (owner token)
+//   GET  /ui/view        live viewer page (noVNC client, token in query)
 //   /api/ui/*            panel API (owner token only)
 // Security model: Tailscale-only binding + Bearer tokens. There are no
 // scoped public endpoints. The server binds PORTAL_HOST
@@ -13,10 +19,12 @@
 // done here in code, never by a proxy flag.
 import http from "node:http";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { Store, hashToken } from "./store.mjs";
 import { BrowserManager, browserInfo, resetBrowserCache } from "./browser.mjs";
 import { TOOLS, toolByName, hasScope, text, errText } from "./tools.mjs";
@@ -32,6 +40,8 @@ const MAX_BODY = 2 * 1024 * 1024;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(HERE, "..");
 const UI_FILE = path.join(APP_DIR, "ui", "index.html");
+const VIEW_FILE = path.join(APP_DIR, "ui", "view.html");
+const NOVNC_DIR = path.join(APP_DIR, "node_modules", "@novnc", "novnc");
 
 const store = new Store();
 const browser = new BrowserManager(store);
@@ -64,6 +74,21 @@ function authenticate(req) {
 function isTokenActive(token) {
   const t = store.data.tokens.find((x) => x.id === token.id);
   return !!t && !t.revoked;
+}
+
+// The VNC endpoint accepts the token the way Agent Computer's does:
+// Authorization: Bearer <token> OR ?token=<token> in the query string.
+// hob's viewer sends it in the query (direct URL) and hob's proxy
+// forwards it the same way, so both must work.
+function authenticateUpgrade(req, u) {
+  const t = authenticate(req);
+  if (t) return t;
+  const q = u.searchParams.get("token");
+  if (!q) return null;
+  const row = store.tokenByHash(hashToken(q.trim()));
+  if (!row || row.revoked) return null;
+  row.lastUsedAt = Date.now();
+  return row;
 }
 
 // Persist lastUsedAt at most every 30s; audit writes are append-only.
@@ -509,6 +534,40 @@ const server = http.createServer(async (req, res) => {
       res.end(html);
       return;
     }
+    if (req.method === "GET" && u.pathname === "/ui/view") {
+      // Token rides in the query string (a full-page navigation cannot
+      // set an Authorization header); the WebSocket connection itself
+      // carries the token and is what gets authenticated.
+      const html = await fs.promises.readFile(VIEW_FILE, "utf8");
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    }
+    if (req.method === "GET" && parts[0] === "novnc") {
+      // Static files for the noVNC client used by /ui/view. Only files
+      // inside the installed @novnc/novnc package are servable.
+      const rel = parts.slice(1).join("/");
+      const file = path.resolve(NOVNC_DIR, rel);
+      if (!file.startsWith(NOVNC_DIR + path.sep) || rel.includes("..")) {
+        sendJson(res, 404, { error: "not found" });
+        return;
+      }
+      try {
+        const data = await fs.promises.readFile(file);
+        const type = file.endsWith(".js") || file.endsWith(".mjs")
+          ? "text/javascript; charset=utf-8"
+          : file.endsWith(".css")
+            ? "text/css; charset=utf-8"
+            : file.endsWith(".html")
+              ? "text/html; charset=utf-8"
+              : "application/octet-stream";
+        res.writeHead(200, { "content-type": type, "cache-control": "no-store" });
+        res.end(data);
+      } catch {
+        sendJson(res, 404, { error: "not found" });
+      }
+      return;
+    }
     if (req.method === "GET" && u.pathname === "/api/health") {
       sendJson(res, 200, { ok: true, name: "portal", version: VERSION });
       return;
@@ -562,6 +621,108 @@ server.listen(PORT, HOST, () => {
   console.log(
     `[portal] listening on http://${HOST}:${PORT} (MCP /mcp, panel /ui/) home=${store.home}`,
   );
+});
+
+// ---- live view (noVNC) WebSocket proxy ------------------------------------
+// GET /api/computers/:id/vnc — the same endpoint and bindings Agent
+// Computer exposes: Bearer header or ?token=, the 'binary' WebSocket
+// subprotocol, then the raw RFB byte stream. Portal never terminates
+// the RFB stream: bytes pipe straight to the profile's Xvnc display,
+// exactly like Agent Computer's control plane pipes to its guest VNC
+// bridge. Connecting starts (or promotes) that profile's browser
+// headed, the way Agent Computer wakes the computer on viewer connect.
+// Which profile is shown is decided by the token: a profile-bound
+// token always shows its own profile; the owner token selects one via
+// ?profile= (default "default"). That is what makes per-bot views work
+// through hob's viewer — each bot profile connects with its own token.
+const wss = new WebSocketServer({
+  noServer: true,
+  handleProtocols: (protocols) => {
+    if (protocols.has("binary")) return "binary";
+    const first = [...protocols][0];
+    return first || false;
+  },
+});
+
+server.on("upgrade", async (req, socket, head) => {
+  const fail = (code, msg) => {
+    try {
+      socket.write(`HTTP/1.1 ${code} ${msg}\r\nContent-Length: 0\r\n\r\n`);
+    } catch {
+      /* gone */
+    }
+    socket.destroy();
+  };
+  let u;
+  try {
+    u = new URL(req.url ?? "/", "http://localhost");
+  } catch {
+    return fail(400, "Bad Request");
+  }
+  const m = /^\/api\/computers\/([^/]+)\/vnc$/.exec(u.pathname);
+  if (!m) return fail(404, "Not Found");
+  const token = authenticateUpgrade(req, u);
+  if (!token) return fail(401, "Unauthorized");
+  let computerId;
+  try {
+    computerId = decodeURIComponent(m[1]);
+  } catch {
+    return fail(400, "Bad Request");
+  }
+  if (computerId !== "portal") return fail(404, "Not Found");
+  // Bound tokens show their own profile even if ?profile= says otherwise.
+  const slug = token.profileSlug || u.searchParams.get("profile") || "default";
+  const profile = store.profileBySlug(slug);
+  if (!profile) return fail(404, "Not Found");
+  let headed;
+  try {
+    headed = await browser.ensureHeaded(profile);
+  } catch (e) {
+    console.warn(`[vnc] headed start failed for ${slug}: ${e.message}`);
+    return fail(502, "Bad Gateway");
+  }
+  store.audit({ kind: "vnc.open", profile: profile.slug });
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    const upstream = net.connect(headed.port, "127.0.0.1");
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      try {
+        upstream.destroy();
+      } catch {
+        /* gone */
+      }
+      try {
+        ws.close();
+      } catch {
+        /* gone */
+      }
+    };
+    upstream.on("data", (chunk) => {
+      if (ws.readyState === ws.OPEN) {
+        try {
+          ws.send(chunk, { binary: true });
+        } catch {
+          cleanup();
+        }
+      }
+    });
+    ws.on("message", (data) => {
+      try {
+        upstream.write(data);
+      } catch {
+        cleanup();
+      }
+    });
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
+    upstream.on("close", cleanup);
+    upstream.on("error", (err) => {
+      console.warn(`[vnc-upstream-error] profile=${profile.slug}: ${err.message}`);
+      cleanup();
+    });
+  });
 });
 
 async function shutdown(signal) {

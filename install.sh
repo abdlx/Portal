@@ -76,11 +76,11 @@ fi
 echo "Checking Camoufox's system libraries…"
 if command -v apt-get >/dev/null 2>&1; then
   if sudo -n true 2>/dev/null; then
-    sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64 || echo "WARNING: library install failed — run the apt command below by hand."
+    sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64 tigervnc-standalone-server || echo "WARNING: library install failed — run the apt command below by hand."
   else
     echo "NOTE: passwordless sudo is not available, so the libraries were not installed."
     echo "If the browser fails to start with a missing .so error, run:"
-    echo "  sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64"
+    echo "  sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libx11-xcb1 libasound2t64 tigervnc-standalone-server"
   fi
 fi
 

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal — live view</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+  #screen { position: fixed; inset: 0 0 28px 0; }
+  #screen canvas { display: block; }
+  #bar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 28px;
+    display: flex; align-items: center; gap: 12px; padding: 0 10px;
+    background: #111; color: #ccc; font: 13px/1 system-ui, sans-serif;
+  }
+  #bar .dot { width: 9px; height: 9px; border-radius: 50%; background: #c33; flex: none; }
+  #bar .dot.on { background: #3c3; }
+  #bar button {
+    margin-left: auto; background: #222; color: #eee; border: 1px solid #444;
+    border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit;
+  }
+  #bar button:hover { background: #333; }
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<div id="bar">
+  <span id="dot" class="dot"></span>
+  <span id="status">Connecting…</span>
+  <span id="who"></span>
+  <button id="reconnect" type="button">Reconnect</button>
+</div>
+<script type="module">
+  import RFB from '/novnc/core/rfb.js';
+
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token') || '';
+  const profile = params.get('profile') || 'default';
+  const statusEl = document.getElementById('status');
+  const dotEl = document.getElementById('dot');
+  const whoEl = document.getElementById('who');
+  const screenEl = document.getElementById('screen');
+  whoEl.textContent = 'Profile: ' + profile;
+  document.title = 'Portal — live view: ' + profile;
+
+  let rfb = null;
+  function connect() {
+    if (rfb) { try { rfb.disconnect(); } catch {} rfb = null; }
+    screenEl.innerHTML = '';
+    if (!token) {
+      statusEl.textContent = 'No token in the URL. Open this view from the Portal panel.';
+      return;
+    }
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = scheme + '//' + location.host + '/api/computers/portal/vnc'
+      + '?token=' + encodeURIComponent(token)
+      + '&profile=' + encodeURIComponent(profile);
+    statusEl.textContent = 'Connecting…';
+    dotEl.classList.remove('on');
+    rfb = new RFB(screenEl, wsUrl, { wsProtocols: ['binary'] });
+    rfb.scaleViewport = true;
+    rfb.clipViewport = false;
+    rfb.background = '#000000';
+    rfb.qualityLevel = 6;
+    rfb.compressionLevel = 2;
+    rfb.addEventListener('connect', () => {
+      statusEl.textContent = 'Connected — live view of ' + profile;
+      dotEl.classList.add('on');
+    });
+    rfb.addEventListener('disconnect', (e) => {
+      dotEl.classList.remove('on');
+      statusEl.textContent = e.detail && e.detail.clean
+        ? 'Disconnected.'
+        : 'Connection failed — is the browser running and the token valid?';
+    });
+    rfb.addEventListener('credentialsrequired', () => {
+      statusEl.textContent = 'The view needs a valid token.';
+    });
+  }
+  document.getElementById('reconnect').addEventListener('click', connect);
+  connect();
+</script>
+</body>
+</html>

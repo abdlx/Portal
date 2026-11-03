@@ -130,7 +130,8 @@ function renderBots(bots) {
       <td><b>${esc(b.name)}</b><br><span class="muted">${esc(b.slug)}${b.isDefault ? ' · default' : ''}</span><br><span class="muted">${esc(b.description || '')}</span></td>
       <td><span class="dot ${b.browserStarted ? 'ok' : 'idle'}"></span> ${b.browserStarted ? 'running' : 'stopped'}${b.browserUrl ? `<br><code>${esc(b.browserUrl)}</code>` : ''}<br>
         <button class="secondary" data-act="bstart" data-id="${b.slug}">Start</button>
-        <button class="secondary" data-act="bstop" data-id="${b.slug}">Close</button></td>
+        <button class="secondary" data-act="bstop" data-id="${b.slug}">Close</button>
+        <button class="secondary" data-act="view" data-id="${b.slug}">View live</button></td>
       <td>${b.tokens.map(t => `<div><code>${esc(t.name)}</code> ${t.revoked ? '<b>REVOKED</b>' : ''}<br>
         <button class="secondary" data-act="reveal" data-id="${t.id}">Show token</button>
         ${t.revoked ? '' : `<button class="secondary" data-act="revoke" data-id="${t.id}">Revoke</button>`}
@@ -147,7 +148,11 @@ async function onBotAction(ev) {
   const btn = ev.currentTarget, act = btn.dataset.act, id = btn.dataset.id;
   btn.disabled = true;
   try {
-    if (act === 'reveal') {
+    if (act === 'view') {
+      // Owner token selects the profile via ?profile=; the live view
+      // starts (or promotes) that bot's browser headed.
+      window.open(`/ui/view?profile=${encodeURIComponent(id)}&token=${encodeURIComponent(ownerToken)}`, '_blank');
+    } else if (act === 'reveal') {
       const j = await api(`/api/ui/bots/x/token/${id}/reveal`);
       const el = $('tok-' + id);
       el.innerHTML = ` <code>${esc(j.plaintext)}</code> <button class="secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(j.plaintext)});this.textContent='Copied'">Copy</button>`;
