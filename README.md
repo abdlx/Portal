@@ -4,6 +4,16 @@
 
 Portal turns a spare Linux laptop into an agent computer: one computer, one isolated stealth-browser profile per bot, each bot with its own token. It speaks the same MCP + REST surface as Agent Computer (`computer_list`, `browser_*`, `fs_*`, `terminal_exec`, `batch`, `profile_*`), so any agent host that already talks to Agent Computer — hob included — connects with a URL + token and drives the laptop's browser. The browser is Camoufox, a patched Firefox built to avoid bot detection, driven through Playwright (Firefox's Juggler protocol — Mozilla removed CDP from Firefox in version 141, so there is no CDP endpoint here). Every bot's cookies, logins, and files stay in its own folder on the laptop, and each bot gets one pinned fingerprint identity, drawn once and replayed on every launch.
 
+## Features at a glance
+
+- **25 MCP tools** for computer lifecycle, browser navigation and tabs, snapshots, file operations, sandboxed shell access, and batched actions.
+- **Per-bot persistent Camoufox profiles** with stored logins, pinned browser fingerprints, private workspaces, and per-bot bearer tokens.
+- **Live browser view and interactive human control** using one local TigerVNC display per headed bot and a noVNC web viewer. Agent browser tools and human mouse/keyboard input operate on the same browser.
+- **Agent Computer-compatible endpoint** for MCP plus REST lifecycle calls, so HOB or any compatible agent host can connect without a separate computer VM.
+- **Owner control panel** for bot creation, credential rotation/reveal, browser installation and repair, and audit history.
+
+**Takeover limitation:** VNC permits a human to interact with the browser, but Portal does not currently implement a human-exclusive control lease. Agent actions are not automatically paused while a human is using the viewer. When an already-running headless profile is opened in live view, Portal closes and relaunches it headed; persisted cookies and profile data survive, but in-page transient state may not.
+
 ## Install — one line
 
 Run this on the laptop:
@@ -42,17 +52,16 @@ Deleting a bot revokes its tokens. Its files on disk are never deleted automatic
 
 - **MCP server** (`POST /mcp`): `initialize`, `ping`, `tools/list`, `tools/call` — including a bare `tools/call` with no prior `initialize`, which is how hob's bridge calls it. Protocol versions `2024-11-05`, `2025-03-26`, `2025-06-18`.
 - **REST fallback** (`GET /api/computers`, `GET /api/computers/:id`, `POST /api/computers/:id/wake|sleep`) with the same Bearer auth.
-- **21 tools**: `computer_list/status/wake/sleep`, `profile_list`, `profile_current`, `browser_start/navigate/snapshot/click/fill/press/content/close`, `fs_list/read/write/mkdir/delete`, `terminal_exec`, `batch` (1–50 steps, stops on first error unless `stopOnError: false`, no nested batch, no admin tools inside). Desktop/mouse/keyboard/screenshot tools are deliberately not listed — this is a browser computer.
+- **25 tools**: `computer_list/status/wake/sleep`, `profile_list`, `profile_current`, `browser_start/navigate/tab_new/tab_list/tab_switch/tab_close/snapshot/click/fill/press/content/close`, `fs_list/read/write/mkdir/delete`, `terminal_exec`, `batch` (1–50 steps, stops on first error unless `stopOnError: false`, no nested batch, no admin tools inside). Desktop/mouse/keyboard/screenshot tools are deliberately not listed — this is a browser computer.
 - **Isolation**: each bot gets a workspace, `~/.portal/profiles/<slug>/workspace/` (created automatically with the bot, `downloads/` inside). File tools cannot escape the workspace (symlinks resolved). The shell (`terminal_exec`) runs inside a bubblewrap sandbox: the whole filesystem is read-only except the workspace, which the shell sees at `/tmp/workspace`; the real home directory is hidden; `/tmp` is fresh. The bot keeps network access and full freedom inside its workspace. A profile-bound token naming another profile is rejected before any work happens (fail-closed, including inside `batch`). Rate limit: 600 calls/min per token (429, `-32029`). Requires the `bubblewrap` system package (the installer installs it and smoke-tests the sandbox); without it the shell refuses to run. Owner override for hosts without user namespaces: `PORTAL_ALLOW_UNSANDBOXED_SHELL=1` — the shell then runs unsandboxed as the Portal user; never set it in production.
 - **Browser**: Camoufox via the `camoufox` package's `Camoufox()` (persistent context) with `humanize: true`, one pinned fpgen fingerprint per bot (drawn once, stored under `~/.portal/browser-fingerprints/`, replayed every launch), timezone Asia/Karachi, locale en-US. No JavaScript injection, no UA overrides. No license limit on concurrent browsers — RAM is the limit.
 - **Tabs**: always enabled, never disabled. Every profile's browser can hold many tabs: `browser_tab_new/list/switch/close`, `browser_navigate` with `newTab: true`, and a `tab` argument on navigate/snapshot/click/fill/press/content. Snapshot refs belong to the tab that was snapshotted.
-- **Live view**: a noVNC (RFB) viewer on the same endpoint and bindings Agent Computer uses — `GET /api/computers/portal/vnc`, WebSocket upgrade, `Authorization: Bearer <token>` or `?token=`, `binary` subprotocol, raw RFB bytes to the profile's own TigerVNC X server. A profile-bound token always shows its own browser; the owner token selects via `?profile=`. Connecting starts (or promotes) that bot's browser headed inside its Xvnc display (1280×800); MCP tools keep working on the headed page. Viewer page: `/ui/view?profile=<slug>&token=<token>` (also a "View live" button per bot in the panel). Requires the `tigervnc-standalone-server` system package (`Xvnc`); without it the viewer fails cleanly with a 502 and MCP browsing is unaffected.
+- **Live view and interactive human control**: a noVNC (RFB) viewer on the same endpoint and bindings Agent Computer uses — `GET /api/computers/portal/vnc`, WebSocket upgrade, `Authorization: Bearer <token>` or `?token=`, `binary` subprotocol, raw RFB bytes to the profile's own TigerVNC X server. A profile-bound token always shows its own browser; the owner token selects via `?profile=`. Connecting starts (or promotes) that bot's browser headed inside its Xvnc display (1280×800); MCP tools keep working on the headed page. Viewer page: `/ui/view?profile=<slug>&token=<token>` (also a "View live" button per bot in the panel). Requires the `tigervnc-standalone-server` system package (`Xvnc`); without it the viewer fails cleanly with a 502 and MCP browsing is unaffected.
 - **Control panel** (`/ui/`): owner-only. Status, Camoufox install/repair, bot + token management, recent activity from the audit log.
 
 ## What it does NOT do
 
-- No VNC / live desktop view.
-- No wake-on-call, no leases, no human-takeover arbitration.
+- No wake-on-call or exclusive human-takeover leases/arbitration. The VNC viewer provides interactive human input but does not automatically suspend agent tool actions.
 - No CAPTCHA solving. Camoufox aims to prevent challenges, not solve them.
 - No proxy rotation — the home IP is the point.
 - No token expiry (same as Agent Computer): revocation + rate limit are the controls. Rotate tokens from the panel when one leaks.
@@ -74,6 +83,10 @@ Deleting a bot revokes its tokens. Its files on disk are never deleted automatic
 - Logs: `journalctl --user -u portal.service -f`
 - Port already in use: set `PORTAL_PORT` and re-run install.
 - Manual start (no systemd): `node src/server.mjs` with `PORTAL_HOST` / `PORTAL_PORT` / `PORTAL_HOME` set.
+
+## Repository topics
+
+Suggested GitHub topics: `ai-agents`, `agent-computer`, `mcp`, `browser-automation`, `camoufox`, `novnc`, `vnc`, `self-hosted`, `multi-agent`, `hermes-agent`.
 
 ## Tests
 
