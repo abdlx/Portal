@@ -157,13 +157,16 @@ const SNAPSHOT_JS = `() => {
     const parts = [];
     let n = el;
     while (n && n.nodeType === 1) {
+      if (n.id && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(n.id)) {
+        parts.unshift('*[@id=\"' + n.id + '\"]');
+        return '//' + parts.join('/');
+      }
       const tag = n.tagName.toLowerCase();
       let idx = 1;
       let sib = n.previousElementSibling;
       while (sib) { if (sib.tagName === n.tagName) idx++; sib = sib.previousElementSibling; }
       parts.unshift(tag + '[' + idx + ']');
       n = n.parentElement;
-      if (parts.length > 12) break;
     }
     return '/' + parts.join('/');
   }
