@@ -32,6 +32,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { startDisplay, stopDisplay, VIEW_WIDTH, VIEW_HEIGHT } from "./vnc.mjs";
+import { getSystemHeadroom } from "./tools.mjs";
 
 const MISSING_MSG =
   "Camoufox is not installed yet. Run `npx camoufox fetch` in the app directory (downloads the browser build once), or press Install / repair Camoufox in the Portal panel, then try again.";
@@ -190,8 +191,19 @@ const SNAPSHOT_JS = `() => {
 export class BrowserManager {
   constructor(store) {
     this.store = store;
-    this.contexts = new Map(); // slug -> { context, page, refs: Map, chain: Promise }
+    this.contexts = new Map(); // slug -> { context, page, refs: Map, chain: Promise, tabs, tabCounter, active, refMaps, tabMeta }
     this.starting = new Map();
+    // Automated 2-hour idle tab cleanup (runs every 60s)
+    this.idleCleanupTimer = setInterval(() => {
+      this.cleanIdleTabs().catch(() => {});
+    }, 60000).unref();
+  }
+
+  stopIdleCleanup() {
+    if (this.idleCleanupTimer) {
+      clearInterval(this.idleCleanupTimer);
+      this.idleCleanupTimer = null;
+    }
   }
 
   #chain(slug, fn) {
@@ -199,7 +211,7 @@ export class BrowserManager {
     const next = prev.then(fn, fn);
     const entry = this.contexts.get(slug);
     if (entry) entry.chain = next;
-    else this.contexts.set(slug, { context: null, page: null, refs: new Map(), chain: next, tabs: new Map(), tabCounter: 0, active: null, refMaps: new Map() });
+    else this.contexts.set(slug, { context: null, page: null, refs: new Map(), chain: next, tabs: new Map(), tabCounter: 0, active: null, refMaps: new Map(), tabMeta: new Map() });
     return next;
   }
 
@@ -216,8 +228,108 @@ export class BrowserManager {
       id = `tab${++entry.tabCounter}`;
       entry.tabs.set(page, id);
       if (!entry.refMaps.has(id)) entry.refMaps.set(id, new Map());
+      if (!entry.tabMeta) entry.tabMeta = new Map();
+      if (!entry.tabMeta.has(id)) {
+        entry.tabMeta.set(id, {
+          lastActivityTimestamp: Date.now(),
+          activeRequests: 0,
+          activeDownloads: 0,
+          activeWebSockets: 0,
+          isAutomating: false,
+        });
+        this.#attachActivityWatchers(entry, page, id);
+      }
     }
     return id;
+  }
+
+  #attachActivityWatchers(entry, page, tabId) {
+    try {
+      page.on("request", () => {
+        const meta = entry.tabMeta?.get(tabId);
+        if (meta) {
+          meta.activeRequests++;
+          meta.lastActivityTimestamp = Date.now();
+        }
+      });
+      page.on("requestfinished", () => {
+        const meta = entry.tabMeta?.get(tabId);
+        if (meta && meta.activeRequests > 0) meta.activeRequests--;
+      });
+      page.on("requestfailed", () => {
+        const meta = entry.tabMeta?.get(tabId);
+        if (meta && meta.activeRequests > 0) meta.activeRequests--;
+      });
+      page.on("websocket", (ws) => {
+        const meta = entry.tabMeta?.get(tabId);
+        if (meta) {
+          meta.activeWebSockets++;
+          meta.lastActivityTimestamp = Date.now();
+        }
+        ws.on("close", () => {
+          const m = entry.tabMeta?.get(tabId);
+          if (m && m.activeWebSockets > 0) m.activeWebSockets--;
+        });
+      });
+      page.on("download", () => {
+        const meta = entry.tabMeta?.get(tabId);
+        if (meta) {
+          meta.activeDownloads++;
+          meta.lastActivityTimestamp = Date.now();
+        }
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  isTabProcessing(entry, tabId) {
+    const meta = entry.tabMeta?.get(tabId);
+    if (!meta) return false;
+    return (
+      meta.isAutomating ||
+      meta.activeRequests > 0 ||
+      meta.activeDownloads > 0 ||
+      meta.activeWebSockets > 0
+    );
+  }
+
+  #touchTab(entry, tabId, isAutomating = false) {
+    const meta = entry.tabMeta?.get(tabId);
+    if (meta) {
+      meta.lastActivityTimestamp = Date.now();
+      if (typeof isAutomating === "boolean") meta.isAutomating = isAutomating;
+    }
+  }
+
+  async cleanIdleTabs(maxIdleMs = 2 * 60 * 60 * 1000) {
+    const now = Date.now();
+    const closed = [];
+    for (const [slug, entry] of this.contexts) {
+      if (!entry.context) continue;
+      this.#syncPages(entry);
+      const pages = entry.context.pages();
+      if (pages.length <= 1) continue; // Keep at least one tab open
+      for (const pg of pages) {
+        const id = entry.tabs.get(pg);
+        if (!id) continue;
+        const meta = entry.tabMeta?.get(id);
+        if (!meta) continue;
+        const processing = this.isTabProcessing(entry, id);
+        if (!processing && now - meta.lastActivityTimestamp >= maxIdleMs) {
+          const idleMin = Math.round((now - meta.lastActivityTimestamp) / 60000);
+          console.log(`[portal] auto-closing idle tab ${id} in profile ${slug} (idle for ${idleMin}m >= ${Math.round(maxIdleMs / 60000)}m)`);
+          try {
+            await pg.close();
+            closed.push({ profile: slug, tab: id, idleMin });
+          } catch {
+            /* already closed */
+          }
+        }
+      }
+      this.#syncPages(entry);
+    }
+    return closed;
   }
 
   #syncPages(entry) {
@@ -227,6 +339,7 @@ export class BrowserManager {
       if (!live.has(pg)) {
         entry.tabs.delete(pg);
         entry.refMaps.delete(id);
+        entry.tabMeta?.delete(id);
       }
     }
     for (const pg of live) this.#tabIdFor(entry, pg);
@@ -290,18 +403,23 @@ export class BrowserManager {
       e.page = pg;
       e.refs = new Map();
       e.refMaps.set(id, e.refs);
+      this.#touchTab(e, id, true);
       let status = null;
-      if (url) {
-        const resp = await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-        status = resp ? resp.status() : null;
-      }
-      let title = "";
       try {
-        title = await pg.title();
-      } catch {
-        /* ignore */
+        if (url) {
+          const resp = await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+          status = resp ? resp.status() : null;
+        }
+        let title = "";
+        try {
+          title = await pg.title();
+        } catch {
+          /* ignore */
+        }
+        return { tab: id, url: pg.url(), title, status };
+      } finally {
+        this.#touchTab(e, id, false);
       }
-      return { tab: id, url: pg.url(), title, status };
     });
   }
 
@@ -319,7 +437,17 @@ export class BrowserManager {
       } catch {
         /* ignore */
       }
-      tabs.push({ tab: entry.tabs.get(pg), url: pg.url(), title });
+      const id = entry.tabs.get(pg);
+      const meta = entry.tabMeta?.get(id);
+      const isProcessing = this.isTabProcessing(entry, id);
+      tabs.push({
+        tab: id,
+        url: pg.url(),
+        title,
+        lastActivityAt: meta?.lastActivityTimestamp || null,
+        idleMinutes: meta ? Math.floor((Date.now() - meta.lastActivityTimestamp) / 60000) : 0,
+        isProcessing,
+      });
     }
     return {
       started: true,
@@ -333,13 +461,15 @@ export class BrowserManager {
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, false);
       let title = "";
       try {
         title = await pg.title();
       } catch {
         /* ignore */
       }
-      return { tab: e.tabs.get(pg), url: pg.url(), title };
+      return { tab: tabId, url: pg.url(), title };
     });
   }
 
@@ -379,6 +509,20 @@ export class BrowserManager {
         return existing;
       }
     }
+    // Intelligent OS Headroom: check available system RAM before launching a new browser.
+    // Dynamic reservation: 1.25GB reserved for host OS (desktop, systemd).
+    const headroom = getSystemHeadroom();
+    if (!headroom.headroomOk) {
+      await this.cleanIdleTabs(30 * 60 * 1000);
+      const retry = getSystemHeadroom();
+      if (!retry.headroomOk) {
+        const availMB = Math.round(retry.memAvailableBytes / (1024 * 1024));
+        const reservedMB = Math.round(retry.headroomReservedBytes / (1024 * 1024));
+        throw new Error(
+          `Cannot start browser: host memory headroom reached (${availMB}MB available, reserving ${reservedMB}MB for host OS). Free host memory or close unused tabs.`
+        );
+      }
+    }
     if (this.starting.has(slug)) return this.starting.get(slug);
     const p = this.#start(profile, opts);
     this.starting.set(slug, p);
@@ -413,6 +557,10 @@ export class BrowserManager {
   }
 
   async #start(profile, opts = {}) {
+    const bInfo = await browserInfo();
+    if (!bInfo.installed) {
+      throw new Error(MISSING_MSG);
+    }
     const loaders = await loadLoaders();
     const userDataDir = this.store.browserProfileDir(profile.slug);
     fs.mkdirSync(userDataDir, { recursive: true });
@@ -535,14 +683,20 @@ export class BrowserManager {
       } else {
         pg = await this.#activePage(e, opts.tab);
       }
-      const resp = await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-      let title = "";
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
       try {
-        title = await pg.title();
-      } catch {
-        /* ignore */
+        const resp = await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        let title = "";
+        try {
+          title = await pg.title();
+        } catch {
+          /* ignore */
+        }
+        return { url: pg.url(), title, status: resp ? resp.status() : null, tab: tabId };
+      } finally {
+        this.#touchTab(e, tabId, false);
       }
-      return { url: pg.url(), title, status: resp ? resp.status() : null, tab: e.tabs.get(pg) };
     });
   }
 
@@ -550,31 +704,37 @@ export class BrowserManager {
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
-      // Playwright evaluates a string argument as an expression: a bare
-      // arrow function would come back as an unserializable function
-      // (undefined). Invoke it.
-      const items = await pg.evaluate(`(${SNAPSHOT_JS})()`);
-      const refs = new Map();
-      const lines = items.map((it, i) => {
-        const ref = `e${i + 1}`;
-        refs.set(ref, it.xpath);
-        const extra = [
-          it.disabled ? "disabled" : "",
-          it.checked ? "checked" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return `${ref} [${it.role}] ${JSON.stringify(it.name)}${extra ? " " + extra : ""}`;
-      });
-      e.refs = refs;
-      e.refMaps.set(e.tabs.get(pg), refs);
-      let title = "";
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
       try {
-        title = await pg.title();
-      } catch {
-        /* ignore */
+        // Playwright evaluates a string argument as an expression: a bare
+        // arrow function would come back as an unserializable function
+        // (undefined). Invoke it.
+        const items = await pg.evaluate(`(${SNAPSHOT_JS})()`);
+        const refs = new Map();
+        const lines = items.map((it, i) => {
+          const ref = `e${i + 1}`;
+          refs.set(ref, it.xpath);
+          const extra = [
+            it.disabled ? "disabled" : "",
+            it.checked ? "checked" : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return `${ref} [${it.role}] ${JSON.stringify(it.name)}${extra ? " " + extra : ""}`;
+        });
+        e.refs = refs;
+        e.refMaps.set(tabId, refs);
+        let title = "";
+        try {
+          title = await pg.title();
+        } catch {
+          /* ignore */
+        }
+        return { url: pg.url(), title, tab: tabId, elements: lines.join("\n") };
+      } finally {
+        this.#touchTab(e, tabId, false);
       }
-      return { url: pg.url(), title, tab: e.tabs.get(pg), elements: lines.join("\n") };
     });
   }
 
@@ -592,9 +752,15 @@ export class BrowserManager {
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
-      const xpath = await this.#resolveRef(e, ref);
-      await pg.locator(`xpath=${xpath}`).first().click({ timeout: 10000 });
-      return { ok: true, ref, tab: e.tabs.get(pg), url: pg.url() };
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
+      try {
+        const xpath = await this.#resolveRef(e, ref);
+        await pg.locator(`xpath=${xpath}`).first().click({ timeout: 10000 });
+        return { ok: true, ref, tab: tabId, url: pg.url() };
+      } finally {
+        this.#touchTab(e, tabId, false);
+      }
     });
   }
 
@@ -602,20 +768,26 @@ export class BrowserManager {
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
-      const xpath = await this.#resolveRef(e, ref);
-      const loc = pg.locator(`xpath=${xpath}`).first();
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
       try {
-        await loc.fill(text, { timeout: 10000 });
-      } catch {
+        const xpath = await this.#resolveRef(e, ref);
+        const loc = pg.locator(`xpath=${xpath}`).first();
         try {
-          await loc.selectOption({ label: text }, { timeout: 5000 });
+          await loc.fill(text, { timeout: 10000 });
         } catch {
-          await loc.click({ timeout: 10000 });
-          await pg.keyboard.press("Control+a");
-          await pg.keyboard.type(text);
+          try {
+            await loc.selectOption({ label: text }, { timeout: 5000 });
+          } catch {
+            await loc.click({ timeout: 10000 });
+            await pg.keyboard.press("Control+a");
+            await pg.keyboard.type(text);
+          }
         }
+        return { ok: true, ref, tab: tabId };
+      } finally {
+        this.#touchTab(e, tabId, false);
       }
-      return { ok: true, ref, tab: e.tabs.get(pg) };
     });
   }
 
@@ -623,8 +795,14 @@ export class BrowserManager {
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
-      await pg.keyboard.press(key, { timeout: 10000 });
-      return { ok: true, key, tab: e.tabs.get(pg) };
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
+      try {
+        await pg.keyboard.press(key, { timeout: 10000 });
+        return { ok: true, key, tab: tabId };
+      } finally {
+        this.#touchTab(e, tabId, false);
+      }
     });
   }
 
@@ -632,16 +810,22 @@ export class BrowserManager {
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
-      let title = "";
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
       try {
-        title = await pg.title();
-      } catch {
-        /* ignore */
+        let title = "";
+        try {
+          title = await pg.title();
+        } catch {
+          /* ignore */
+        }
+        const text = await pg.evaluate(
+          "(() => (document.body ? document.body.innerText.slice(0, 50000) : ''))()",
+        );
+        return { url: pg.url(), title, tab: tabId, text };
+      } finally {
+        this.#touchTab(e, tabId, false);
       }
-      const text = await pg.evaluate(
-        "(() => (document.body ? document.body.innerText.slice(0, 50000) : ''))()",
-      );
-      return { url: pg.url(), title, tab: e.tabs.get(pg), text };
     });
   }
 }

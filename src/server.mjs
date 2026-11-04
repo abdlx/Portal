@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { Store, hashToken } from "./store.mjs";
 import { BrowserManager, browserInfo, resetBrowserCache } from "./browser.mjs";
-import { TOOLS, toolByName, hasScope, text, errText, shellSandboxStatus } from "./tools.mjs";
+import { TOOLS, toolByName, hasScope, text, errText, shellSandboxStatus, getSystemHeadroom } from "./tools.mjs";
 import { validateArgs } from "./validate.mjs";
 
 const VERSION = "0.1.0";
@@ -322,6 +322,7 @@ async function handleUiApi(req, res, token, parts) {
         profiles: store.profiles().length,
         browser: await browserInfo(),
         shell: shellSandboxStatus(),
+        headroom: getSystemHeadroom(),
         uptimeSec: Math.floor(process.uptime()),
       });
       return;
@@ -730,6 +731,7 @@ server.on("upgrade", async (req, socket, head) => {
 
 async function shutdown(signal) {
   console.log(`[portal] ${signal}, closing browsers…`);
+  browser.stopIdleCleanup();
   try {
     for (const p of store.profiles()) {
       await browser.close(p).catch(() => {});

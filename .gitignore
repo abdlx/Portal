@@ -1,3 +1,5 @@
 node_modules/
+build/
+*.so
 *.log
 .DS_Store

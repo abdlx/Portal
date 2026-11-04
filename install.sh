@@ -117,33 +117,41 @@ fi
 # This step is intentionally OUTSIDE --skip-browser: app-only updates
 # must still get the sandbox. Passwordless sudo or a printed command,
 # same pattern as the browser libraries above.
-echo "Checking bubblewrap (agent shell sandbox)…"
+echo "Checking bubblewrap and network isolation tools (agent shell sandbox)…"
 if command -v bwrap >/dev/null 2>&1; then
   echo "bubblewrap already installed: $(command -v bwrap)"
 else
   if command -v apt-get >/dev/null 2>&1; then
     if sudo -n true 2>/dev/null; then
-      sudo apt-get install -y --no-install-recommends bubblewrap || echo "WARNING: bubblewrap install failed — run the apt command below by hand."
+      sudo apt-get install -y --no-install-recommends bubblewrap slirp4netns || echo "WARNING: sandbox package install failed — run the apt command below by hand."
     else
-      echo "NOTE: passwordless sudo is not available, so bubblewrap was not installed."
-      echo "Without it, terminal_exec refuses to run. Install it with:"
-      echo "  sudo apt-get install -y bubblewrap"
+      echo "NOTE: passwordless sudo is not available, so bubblewrap/slirp4netns were not installed."
+      echo "Without bubblewrap, terminal_exec refuses to run. Install with:"
+      echo "  sudo apt-get install -y bubblewrap slirp4netns"
     fi
   elif command -v dnf >/dev/null 2>&1; then
-    echo "NOTE: install bubblewrap with: sudo dnf install -y bubblewrap"
+    echo "NOTE: install sandbox packages with: sudo dnf install -y bubblewrap slirp4netns"
   elif command -v pacman >/dev/null 2>&1; then
-    echo "NOTE: install bubblewrap with: sudo pacman -S bubblewrap"
+    echo "NOTE: install sandbox packages with: sudo pacman -S bubblewrap slirp4netns"
   else
     echo "NOTE: install bubblewrap from your distro's packages — without it, terminal_exec refuses to run."
   fi
 fi
+
+# --- Network guard: builds libportal_netguard.so for connect() filtering ---
+echo "Building network guard library (libportal_netguard.so)…"
+mkdir -p "$APP_DIR/build"
+if command -v gcc >/dev/null 2>&1; then
+  gcc -shared -fPIC -O2 "$APP_DIR/src/netguard.c" -o "$APP_DIR/build/libportal_netguard.so" -ldl 2>/dev/null || echo "WARNING: netguard build failed"
+elif command -v cc >/dev/null 2>&1; then
+  cc -shared -fPIC -O2 "$APP_DIR/src/netguard.c" -o "$APP_DIR/build/libportal_netguard.so" -ldl 2>/dev/null || echo "WARNING: netguard build failed"
+fi
+
 # Smoke test: a sandboxed shell must see a read-only root, a writable
-# workspace, and no real home directory. On Ubuntu 24.04, unprivileged
-# user namespaces can be restricted by AppArmor; a failure here prints
-# the fix instead of failing the install.
+# workspace, an isolated PID namespace, and no real home directory.
 if command -v bwrap >/dev/null 2>&1; then
   BWRAP_PROBE_DIR="$(mktemp -d)"
-  if bwrap --ro-bind / / --tmpfs /tmp --bind "$BWRAP_PROBE_DIR" /tmp/workspace --proc /proc --dev /dev --tmpfs "$HOME" --chdir /tmp/workspace sh -c 'test -w /tmp/workspace && test ! -w / && test ! -e "$HOME/.portal"' 2>/dev/null; then
+  if bwrap --ro-bind / / --tmpfs /tmp --bind "$BWRAP_PROBE_DIR" /tmp/workspace --proc /proc --dev /dev --unshare-pid --tmpfs "$HOME" --chdir /tmp/workspace sh -c 'test -w /tmp/workspace && test ! -w / && test ! -e "$HOME/.portal"' 2>/dev/null; then
     echo "bubblewrap sandbox smoke test: OK"
   else
     echo "WARNING: bubblewrap is installed but the sandbox smoke test failed."

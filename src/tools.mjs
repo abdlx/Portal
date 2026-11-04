@@ -4,8 +4,81 @@
 // isError text results, never thrown HTTP errors.
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import os from "node:os";
+import { execFile, execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { obj, validateArgs } from "./validate.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const APP_DIR = path.resolve(HERE, "..");
+const BUILD_DIR = path.join(APP_DIR, "build");
+const NETGUARD_SO = path.join(BUILD_DIR, "libportal_netguard.so");
+const NETGUARD_C = path.join(APP_DIR, "src", "netguard.c");
+
+let netguardChecked = null;
+export function ensureNetguardLibrary() {
+  if (netguardChecked !== null) return netguardChecked;
+  if (fs.existsSync(NETGUARD_SO)) {
+    netguardChecked = NETGUARD_SO;
+    return netguardChecked;
+  }
+  if (!fs.existsSync(NETGUARD_C)) {
+    netguardChecked = null;
+    return null;
+  }
+  const compilers = ["gcc", "cc", "clang"];
+  for (const cc of compilers) {
+    try {
+      fs.mkdirSync(BUILD_DIR, { recursive: true });
+      execFileSync(cc, ["-shared", "-fPIC", "-O2", NETGUARD_C, "-o", NETGUARD_SO, "-ldl"], {
+        stdio: "ignore",
+        timeout: 10000,
+      });
+      if (fs.existsSync(NETGUARD_SO)) {
+        netguardChecked = NETGUARD_SO;
+        return netguardChecked;
+      }
+    } catch {
+      /* try next compiler */
+    }
+  }
+  netguardChecked = null;
+  return null;
+}
+
+// Dynamic OS Headroom Reservation (RAM and CPU)
+// Reserve 1.25 GB RAM and 1 CPU core for host desktop/systemd, letting bots dynamically utilize the rest.
+const RESERVED_HEADROOM_RAM_BYTES = 1250 * 1024 * 1024; // 1.25 GB
+
+export function getSystemHeadroom() {
+  let memAvailable = 0;
+  let memTotal = 0;
+  try {
+    const meminfo = fs.readFileSync("/proc/meminfo", "utf8");
+    const availMatch = meminfo.match(/MemAvailable:\s+(\d+)\s+kB/);
+    const totalMatch = meminfo.match(/MemTotal:\s+(\d+)\s+kB/);
+    if (availMatch) memAvailable = parseInt(availMatch[1], 10) * 1024;
+    if (totalMatch) memTotal = parseInt(totalMatch[1], 10) * 1024;
+  } catch {
+    memAvailable = os.freemem();
+    memTotal = os.totalmem();
+  }
+  const totalCores = os.cpus().length;
+  const botCores = Math.max(1, totalCores - 1);
+  const headroomBytes = RESERVED_HEADROOM_RAM_BYTES;
+  const allowableBytes = Math.max(0, memAvailable - headroomBytes);
+
+  return {
+    memTotalBytes: memTotal,
+    memAvailableBytes: memAvailable,
+    headroomReservedBytes: headroomBytes,
+    allowableBytesForBots: allowableBytes,
+    headroomOk: memAvailable > headroomBytes,
+    totalCores,
+    botCores,
+    reservedCores: totalCores > 1 ? 1 : 0,
+  };
+}
 
 export const text = (v) => ({
   content: [
@@ -200,12 +273,27 @@ function runShell(command, workspace, profileSlug, timeoutS) {
       "/proc",
       "--dev",
       "/dev",
+      "--unshare-pid",
     ];
     // Hide the real home directory (owner files, ssh keys, and every
     // other bot's folder live under it). The workspace bind above is
     // already established, so hiding its original path is safe. Skip
     // when home IS the root, where hiding it would hide the bind too.
     if (realHome !== "/") flags.push("--tmpfs", realHome);
+
+    const netguardSo = ensureNetguardLibrary();
+    const sandboxEnv = {
+      ...process.env,
+      HOME: home,
+      AGENT_PROFILE: profileSlug,
+      AGENT_WORKSPACE: home,
+    };
+
+    if (netguardSo) {
+      flags.push("--ro-bind", netguardSo, "/tmp/libportal_netguard.so");
+      sandboxEnv.LD_PRELOAD = "/tmp/libportal_netguard.so";
+    }
+
     flags.push("--chdir", SANDBOX_WORKSPACE);
     // execFile requires the cwd to exist on the host before the spawn:
     // make sure the sandbox mountpoint is there (/tmp is writable).
@@ -214,8 +302,20 @@ function runShell(command, workspace, profileSlug, timeoutS) {
     } catch {
       /* bwrap reports the failure */
     }
+
+    // Configure OOM score adjustment so agent processes take OOM priority
+    // over host OS services under pressure (+500).
+    // Reserve 1 CPU core for the host OS desktop/systemd, allowing bots
+    // to dynamically utilize remaining cores (cores 1..N-1) under nice +10.
+    const headroom = getSystemHeadroom();
+    let setup = "echo 500 > /proc/self/oom_score_adj 2>/dev/null || true; renice -n 10 $$ >/dev/null 2>&1 || true; ";
+    if (headroom.totalCores > 1) {
+      setup += `taskset -cp 1-${headroom.totalCores - 1} $$ >/dev/null 2>&1 || true; `;
+    }
+    const wrappedCmd = setup + command;
+
     file = "bwrap";
-    argv = [...flags, "bash", "-lc", command];
+    argv = [...flags, "bash", "-lc", wrappedCmd];
     cwd = SANDBOX_WORKSPACE;
     home = SANDBOX_WORKSPACE;
   } else if (!warnedUnsandboxed) {
@@ -224,6 +324,14 @@ function runShell(command, workspace, profileSlug, timeoutS) {
       "[portal] PORTAL_ALLOW_UNSANDBOXED_SHELL=1: terminal_exec runs UNSANDBOXED as the Portal user",
     );
   }
+  const spawnEnv = !allowUnsandboxed && typeof sandboxEnv !== "undefined"
+    ? sandboxEnv
+    : {
+        ...process.env,
+        HOME: home,
+        AGENT_PROFILE: profileSlug,
+        AGENT_WORKSPACE: home,
+      };
   return new Promise((resolve) => {
     execFile(
       file,
@@ -232,12 +340,7 @@ function runShell(command, workspace, profileSlug, timeoutS) {
         cwd,
         timeout: timeoutMs,
         maxBuffer: 20 * 1024,
-        env: {
-          ...process.env,
-          HOME: home,
-          AGENT_PROFILE: profileSlug,
-          AGENT_WORKSPACE: home,
-        },
+        env: spawnEnv,
         windowsHide: true,
       },
       (err, stdout, stderr) => {

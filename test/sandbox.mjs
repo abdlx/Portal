@@ -185,6 +185,7 @@ process.exit(r.status ?? 1);
         check("stub-bwrap: workspace bound at /tmp/workspace", has("--bind", workspace, "/tmp/workspace"));
         check("stub-bwrap: tmpfs /tmp before the bind, proc and dev after", has("--tmpfs", "/tmp", "--bind", workspace, "/tmp/workspace") && has("--proc", "/proc", "--dev", "/dev"));
         check("stub-bwrap: real home hidden after the bind", logged.argv.indexOf("--tmpfs", logged.argv.indexOf("/tmp/workspace")) > logged.argv.indexOf("/tmp/workspace"));
+        check("stub-bwrap: unshare-pid flag present", logged.argv.includes("--unshare-pid"));
         check("stub-bwrap: chdir /tmp/workspace then bash -lc", has("--chdir", "/tmp/workspace", "bash", "-lc"));
         check("stub-bwrap: cwd is /tmp/workspace", logged.cwd === "/tmp/workspace", logged.cwd);
         check("stub-bwrap: HOME and AGENT_WORKSPACE are /tmp/workspace", logged.env.HOME === "/tmp/workspace" && logged.env.AGENT_WORKSPACE === "/tmp/workspace", JSON.stringify(logged.env));
@@ -258,9 +259,9 @@ process.exit(r.status ?? 1);
 
 // ---- D. mount-order probe (unshare) -------------------------------------------
 {
-  const unshare = await run("sh", ["-c", "command -v unshare"]);
+  const unshare = await run("sh", ["-c", "command -v unshare && unshare -rm true 2>/dev/null"]);
   if (unshare.code !== 0) {
-    skip("mount-order probe", "unshare is not available");
+    skip("mount-order probe", "unshare -rm is not permitted in this host environment");
   } else {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "portal-mount-"));
     // Mirrors the bwrap flag order with mount-scoped read-only-ness:
