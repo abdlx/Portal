@@ -445,6 +445,35 @@ export class BrowserManager {
       if (display) await stopDisplay(profile.slug);
       throw new Error(explainLaunchError(e));
     }
+    // Browser downloads persist into the profile's workspace, not the
+    // OS download folder: every download is saved under
+    // <workspace>/downloads/ with a collision-safe name, so what a bot
+    // downloads stays in its own folder.
+    const downloadsDir = this.store.profileDownloads(profile.slug);
+    this.store.ensureWorkspace(profile.slug);
+    const saveDownload = async (dl) => {
+      try {
+        const raw = dl.suggestedFilename() || "download";
+        const base = path.basename(raw).replace(/[\\/]/g, "_") || "download";
+        let dest = path.join(downloadsDir, base);
+        for (let i = 1; fs.existsSync(dest); i++) {
+          const ext = path.extname(base);
+          dest = path.join(downloadsDir, `${path.basename(base, ext)}-${i}${ext}`);
+        }
+        await dl.saveAs(dest);
+      } catch {
+        /* a failed save must never break browsing */
+      }
+    };
+    const attachDownloads = (pg) => {
+      try {
+        pg.on("download", saveDownload);
+      } catch {
+        /* ignore */
+      }
+    };
+    context.on("page", attachDownloads);
+    for (const pg of context.pages()) attachDownloads(pg);
     const page = context.pages()[0] || (await context.newPage());
     const entry = { context, page, refs: new Map(), chain: Promise.resolve(), tabs: new Map(), tabCounter: 0, active: page, refMaps: new Map(), headed: !!opts.headed, display };
     this.contexts.set(profile.slug, entry);

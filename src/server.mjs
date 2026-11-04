@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { Store, hashToken } from "./store.mjs";
 import { BrowserManager, browserInfo, resetBrowserCache } from "./browser.mjs";
-import { TOOLS, toolByName, hasScope, text, errText } from "./tools.mjs";
+import { TOOLS, toolByName, hasScope, text, errText, shellSandboxStatus } from "./tools.mjs";
 import { validateArgs } from "./validate.mjs";
 
 const VERSION = "0.1.0";
@@ -335,6 +335,7 @@ async function handleUiApi(req, res, token, parts) {
           browserStarted: !!st.started,
           browserUrl: st.url || null,
           home: store.profileHome(p.slug),
+          workspace: store.profileWorkspace(p.slug),
         });
       }
       sendJson(res, 200, { bots });
@@ -621,6 +622,7 @@ server.listen(PORT, HOST, () => {
   console.log(
     `[portal] listening on http://${HOST}:${PORT} (MCP /mcp, panel /ui/) home=${store.home}`,
   );
+  console.log(`[portal] shell sandbox: ${shellSandboxStatus()}`);
 });
 
 // ---- live view (noVNC) WebSocket proxy ------------------------------------

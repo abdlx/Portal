@@ -92,12 +92,12 @@ function effectiveProfile(ctx, args) {
   return resolveProfile(ctx, args.profile);
 }
 
-// ---- filesystem confinement -----------------------------------------------
-// Every fs path must stay inside the profile's home. Symlinks are
+// ---- workspace confinement ------------------------------------------------
+// Every fs path must stay inside the profile's workspace. Symlinks are
 // resolved (nearest existing ancestor for not-yet-created paths) so a
-// symlink inside the home cannot smuggle a read outside it.
-function resolveInHome(store, profile, p) {
-  const home = fs.realpathSync(store.profileHome(profile.slug));
+// symlink inside the workspace cannot smuggle a read outside it.
+function resolveInWorkspace(store, profile, p) {
+  const home = fs.realpathSync(store.ensureWorkspace(profile.slug));
   const target = path.resolve(home, p || ".");
   let real;
   try {
@@ -110,22 +110,134 @@ function resolveInHome(store, profile, p) {
   }
   const rel = path.relative(home, real);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error("path escapes the profile home");
+    throw new Error("path escapes the profile workspace");
   }
   return real;
 }
 
-function runShell(command, cwd, timeoutS, envExtra) {
+// ---- shell sandbox (bubblewrap) -------------------------------------------
+// terminal_exec runs inside a bubblewrap sandbox: the whole filesystem
+// is mounted read-only except the bot's workspace (bound writable at
+// /tmp/workspace), the real home directory is hidden behind an empty
+// tmpfs, /tmp is fresh, and the shell starts in /tmp/workspace. The bot
+// keeps network access. The bind target is under /tmp (not /workspace)
+// because bwrap cannot create a mountpoint on the read-only root, and
+// an unprivileged user cannot create one on the live root either —
+// /tmp is always present and writable, and the fresh tmpfs makes the
+// mkdir succeed. Fail-closed: without bwrap on PATH the shell refuses
+// to run, unless the owner explicitly opts out with
+// PORTAL_ALLOW_UNSANDBOXED_SHELL=1 (test/CI hosts, or hosts without
+// user namespaces) — in which case it runs unsandboxed as the Portal
+// user, exactly as before.
+// The in-sandbox path of the workspace. Under /tmp (not /workspace):
+// bwrap creates the bind mountpoint with mkdir, which fails on the
+// read-only root and is forbidden to an unprivileged user on the live
+// root — /tmp is always present and writable, and the fresh tmpfs
+// makes the mkdir succeed there.
+const SANDBOX_WORKSPACE = "/tmp/workspace";
+
+const BWRAP_MISSING_MSG =
+  "terminal_exec is sandboxed with bubblewrap (bwrap), which was not found on PATH. " +
+  "Install it (Debian/Ubuntu: sudo apt-get install -y bubblewrap) and restart Portal. " +
+  "On Ubuntu 24.04, if bwrap exists but sandboxing fails, unprivileged user namespaces may be " +
+  "restricted by AppArmor — the installer smoke test reports the fix. " +
+  "Owner override for hosts without user namespaces: PORTAL_ALLOW_UNSANDBOXED_SHELL=1 " +
+  "(the shell then runs unsandboxed as the Portal user).";
+
+let bwrapChecked = null;
+function bwrapAvailable() {
+  if (bwrapChecked !== null) return bwrapChecked;
+  bwrapChecked = (process.env.PATH || "").split(path.delimiter).some((d) => {
+    try {
+      fs.accessSync(path.join(d, "bwrap"), fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return bwrapChecked;
+}
+
+export function shellSandboxStatus() {
+  if (process.env.PORTAL_ALLOW_UNSANDBOXED_SHELL === "1") {
+    return "opt-out: terminal_exec UNSANDBOXED";
+  }
+  return bwrapAvailable()
+    ? "bubblewrap"
+    : "UNAVAILABLE: terminal_exec will refuse to run";
+}
+
+let warnedUnsandboxed = false;
+
+function runShell(command, workspace, profileSlug, timeoutS) {
   const timeoutMs = Math.min(120, Math.max(1, Number(timeoutS) || 30)) * 1000;
+  const allowUnsandboxed =
+    process.env.PORTAL_ALLOW_UNSANDBOXED_SHELL === "1";
+  let file = "bash";
+  let argv = ["-lc", command];
+  let cwd = workspace;
+  let home = workspace;
+  if (!allowUnsandboxed) {
+    if (!bwrapAvailable()) {
+      return Promise.resolve({
+        stdout: "",
+        stderr: BWRAP_MISSING_MSG,
+        code: 1,
+        timedOut: false,
+      });
+    }
+    const realHome = process.env.HOME || "/";
+    const flags = [
+      "--ro-bind",
+      "/",
+      "/",
+      "--tmpfs",
+      "/tmp",
+      "--bind",
+      workspace,
+      SANDBOX_WORKSPACE,
+      "--proc",
+      "/proc",
+      "--dev",
+      "/dev",
+    ];
+    // Hide the real home directory (owner files, ssh keys, and every
+    // other bot's folder live under it). The workspace bind above is
+    // already established, so hiding its original path is safe. Skip
+    // when home IS the root, where hiding it would hide the bind too.
+    if (realHome !== "/") flags.push("--tmpfs", realHome);
+    flags.push("--chdir", SANDBOX_WORKSPACE);
+    // execFile requires the cwd to exist on the host before the spawn:
+    // make sure the sandbox mountpoint is there (/tmp is writable).
+    try {
+      fs.mkdirSync(SANDBOX_WORKSPACE, { recursive: true });
+    } catch {
+      /* bwrap reports the failure */
+    }
+    file = "bwrap";
+    argv = [...flags, "bash", "-lc", command];
+    cwd = SANDBOX_WORKSPACE;
+    home = SANDBOX_WORKSPACE;
+  } else if (!warnedUnsandboxed) {
+    warnedUnsandboxed = true;
+    console.warn(
+      "[portal] PORTAL_ALLOW_UNSANDBOXED_SHELL=1: terminal_exec runs UNSANDBOXED as the Portal user",
+    );
+  }
   return new Promise((resolve) => {
     execFile(
-      "bash",
-      ["-lc", command],
+      file,
+      argv,
       {
         cwd,
         timeout: timeoutMs,
         maxBuffer: 20 * 1024,
-        env: { ...process.env, ...envExtra },
+        env: {
+          ...process.env,
+          HOME: home,
+          AGENT_PROFILE: profileSlug,
+          AGENT_WORKSPACE: home,
+        },
         windowsHide: true,
       },
       (err, stdout, stderr) => {
@@ -234,12 +346,14 @@ export const TOOLS = [
     description: "Get the profile and workspace context this agent session is operating under.",
     inputSchema: obj({}),
     run: async (ctx) => {
+      const slug = ctx.token.profileSlug ?? "default";
       return text({
         agentName: ctx.token.name,
         computerId: ctx.token.computerId,
         profileId: ctx.token.profileId,
-        profileSlug: ctx.token.profileSlug ?? "default",
+        profileSlug: slug,
         scopes: ctx.token.scopes,
+        workspace: ctx.store.ensureWorkspace(slug),
       });
     },
   },
@@ -387,12 +501,12 @@ export const TOOLS = [
   {
     name: "fs_list",
     scope: "files",
-    description: "List a directory inside the profile's home directory.",
+    description: "List a directory inside the profile's workspace directory.",
     inputSchema: obj({ ...COMPUTER_ARG, path: { type: "string" } }),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const dir = resolveInHome(ctx.store, profile, args.path);
+      const dir = resolveInWorkspace(ctx.store, profile, args.path);
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
       const out = [];
       for (const e of entries) {
@@ -414,12 +528,12 @@ export const TOOLS = [
   {
     name: "fs_read",
     scope: "files",
-    description: "Read a file from the home directory (utf-8, or base64 when binary; 256 KB cap).",
+    description: "Read a file from the workspace directory (utf-8, or base64 when binary; 256 KB cap).",
     inputSchema: obj({ ...COMPUTER_ARG, path: { type: "string" } }, ["path"]),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const file = resolveInHome(ctx.store, profile, args.path);
+      const file = resolveInWorkspace(ctx.store, profile, args.path);
       const buf = await fs.promises.readFile(file);
       if (buf.length > 256 * 1024) throw new Error("file exceeds the 256 KB read cap");
       const isBinary = buf.includes(0);
@@ -433,7 +547,7 @@ export const TOOLS = [
   {
     name: "fs_write",
     scope: "files",
-    description: "Write a file in the home directory (creates parent directories).",
+    description: "Write a file in the workspace directory (creates parent directories).",
     inputSchema: obj(
       {
         ...COMPUTER_ARG,
@@ -446,7 +560,7 @@ export const TOOLS = [
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const file = resolveInHome(ctx.store, profile, args.path);
+      const file = resolveInWorkspace(ctx.store, profile, args.path);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const buf =
         args.encoding === "base64"
@@ -459,12 +573,12 @@ export const TOOLS = [
   {
     name: "fs_mkdir",
     scope: "files",
-    description: "Create a directory (and parents) in the home directory.",
+    description: "Create a directory (and parents) in the workspace directory.",
     inputSchema: obj({ ...COMPUTER_ARG, path: { type: "string" } }, ["path"]),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const dir = resolveInHome(ctx.store, profile, args.path);
+      const dir = resolveInWorkspace(ctx.store, profile, args.path);
       fs.mkdirSync(dir, { recursive: true });
       return text({ created: args.path });
     },
@@ -472,14 +586,14 @@ export const TOOLS = [
   {
     name: "fs_delete",
     scope: "files",
-    description: "Delete a file or directory tree from the home directory.",
+    description: "Delete a file or directory tree from the workspace directory.",
     inputSchema: obj({ ...COMPUTER_ARG, path: { type: "string" } }, ["path"]),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const target = resolveInHome(ctx.store, profile, args.path);
-      const home = fs.realpathSync(ctx.store.profileHome(profile.slug));
-      if (target === home) throw new Error("refusing to delete the profile home itself");
+      const target = resolveInWorkspace(ctx.store, profile, args.path);
+      const workspace = fs.realpathSync(ctx.store.ensureWorkspace(profile.slug));
+      if (target === workspace) throw new Error("refusing to delete the profile workspace itself");
       await fs.promises.rm(target, { recursive: true, force: true });
       return text({ deleted: args.path });
     },
@@ -488,7 +602,7 @@ export const TOOLS = [
     name: "terminal_exec",
     scope: "write",
     description:
-      "Run a shell command on the computer (as its user, in a login shell) and return stdout/stderr/exit code. Long-running processes should use nohup/setsid and return.",
+      "Run a shell command in the profile's workspace, sandboxed with bubblewrap (the whole filesystem is read-only except the workspace, which the shell sees at /tmp/workspace; HOME and AGENT_WORKSPACE are /tmp/workspace). Returns stdout/stderr/exit code. Long-running processes should use nohup/setsid and return.",
     inputSchema: obj(
       { ...COMPUTER_ARG, command: { type: "string" }, timeout_s: { type: "number" } },
       ["command"],
@@ -496,13 +610,9 @@ export const TOOLS = [
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      const home = ctx.store.profileHome(profile.slug);
+      const workspace = fs.realpathSync(ctx.store.ensureWorkspace(profile.slug));
       return text(
-        await runShell(args.command, home, args.timeout_s ?? 30, {
-          HOME: home,
-          AGENT_PROFILE: profile.slug,
-          AGENT_WORKSPACE: home,
-        }),
+        await runShell(args.command, workspace, profile.slug, args.timeout_s ?? 30),
       );
     },
   },

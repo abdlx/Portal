@@ -112,6 +112,49 @@ if command -v apt-get >/dev/null 2>&1; then
 fi
 fi
 
+# --- bubblewrap: the agent shell sandbox (always installed) ----------------
+# terminal_exec runs inside `bwrap`; without it the shell refuses to run.
+# This step is intentionally OUTSIDE --skip-browser: app-only updates
+# must still get the sandbox. Passwordless sudo or a printed command,
+# same pattern as the browser libraries above.
+echo "Checking bubblewrap (agent shell sandbox)…"
+if command -v bwrap >/dev/null 2>&1; then
+  echo "bubblewrap already installed: $(command -v bwrap)"
+else
+  if command -v apt-get >/dev/null 2>&1; then
+    if sudo -n true 2>/dev/null; then
+      sudo apt-get install -y --no-install-recommends bubblewrap || echo "WARNING: bubblewrap install failed — run the apt command below by hand."
+    else
+      echo "NOTE: passwordless sudo is not available, so bubblewrap was not installed."
+      echo "Without it, terminal_exec refuses to run. Install it with:"
+      echo "  sudo apt-get install -y bubblewrap"
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "NOTE: install bubblewrap with: sudo dnf install -y bubblewrap"
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "NOTE: install bubblewrap with: sudo pacman -S bubblewrap"
+  else
+    echo "NOTE: install bubblewrap from your distro's packages — without it, terminal_exec refuses to run."
+  fi
+fi
+# Smoke test: a sandboxed shell must see a read-only root, a writable
+# workspace, and no real home directory. On Ubuntu 24.04, unprivileged
+# user namespaces can be restricted by AppArmor; a failure here prints
+# the fix instead of failing the install.
+if command -v bwrap >/dev/null 2>&1; then
+  BWRAP_PROBE_DIR="$(mktemp -d)"
+  if bwrap --ro-bind / / --tmpfs /tmp --bind "$BWRAP_PROBE_DIR" /tmp/workspace --proc /proc --dev /dev --tmpfs "$HOME" --chdir /tmp/workspace sh -c 'test -w /tmp/workspace && test ! -w / && test ! -e "$HOME/.portal"' 2>/dev/null; then
+    echo "bubblewrap sandbox smoke test: OK"
+  else
+    echo "WARNING: bubblewrap is installed but the sandbox smoke test failed."
+    echo "Likely cause on Ubuntu 24.04: AppArmor restricts unprivileged user namespaces."
+    echo "Fix (owner decision, lowers a distro default):"
+    echo "  echo kernel.apparmor_restrict_unprivileged_userns=0 | sudo tee /etc/sysctl.d/99-portal-bwrap.conf && sudo sysctl --system"
+    echo "Then re-run this installer. Until then, terminal_exec will fail closed."
+  fi
+  rm -rf "$BWRAP_PROBE_DIR"
+fi
+
 # --- Bind address: Tailscale IP when present, localhost otherwise ----------
 TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
 HOST="${PORTAL_HOST:-${TAILSCALE_IP:-127.0.0.1}}"

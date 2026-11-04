@@ -112,6 +112,13 @@ export class Store {
     } catch {
       /* non-fatal */
     }
+    // Profiles created by older versions predate workspaces: give each
+    // one now so the panel and the first agent call agree on the layout.
+    try {
+      for (const p of this.data.profiles) this.ensureWorkspace(p.slug);
+    } catch {
+      /* lazy ensure covers it at first use */
+    }
   }
 
   #load(file, fallback) {
@@ -180,6 +187,9 @@ export class Store {
     fs.mkdirSync(path.join(this.home, "profiles", cleanSlug), {
       recursive: true,
     });
+    // The bot's workspace is created WITH the bot: its files, shell,
+    // and downloads all live here, and nowhere else is writable to it.
+    this.ensureWorkspace(cleanSlug);
     this.save();
     return profile;
   }
@@ -316,6 +326,27 @@ export class Store {
 
   profileHome(slug) {
     return path.join(this.home, "profiles", slug);
+  }
+
+  // A bot's workspace: the one directory it may write to. Everything
+  // the agent stores — files, shell output, browser downloads — lives
+  // under here. The browser profile itself sits beside it in the
+  // profile home, out of the agent's reach.
+  profileWorkspace(slug) {
+    return path.join(this.profileHome(slug), "workspace");
+  }
+
+  profileDownloads(slug) {
+    return path.join(this.profileWorkspace(slug), "downloads");
+  }
+
+  // Creates the workspace (and downloads dir) if missing. Called at
+  // profile creation and lazily before any agent work, so profiles
+  // created by older versions gain a workspace on first use.
+  ensureWorkspace(slug) {
+    const dir = this.profileDownloads(slug);
+    fs.mkdirSync(dir, { recursive: true });
+    return this.profileWorkspace(slug);
   }
 
   browserProfileDir(slug) {

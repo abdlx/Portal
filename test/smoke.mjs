@@ -27,6 +27,12 @@ const server = spawn("node", [path.join(APP, "src", "server.mjs")], {
     PORTAL_HOST: "127.0.0.1",
     PORTAL_PORT: String(PORT),
     PORTAL_HOME: HOME,
+    // The sandbox itself is verified separately (unshare mount probe +
+    // stub/real bwrap harness). This VM has no bubblewrap, and the shell
+    // fails closed without it, so the smoke run uses the documented
+    // owner opt-out: the shell runs unsandboxed, still rooted at the
+    // workspace. Never set this in production.
+    PORTAL_ALLOW_UNSANDBOXED_SHELL: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -83,6 +89,7 @@ try {
   check("bot token issued", typeof dexToken === "string" && dexToken.startsWith("portal_"));
   check("bot creation auto-creates browser profile", typeof mkJson.browserProfile?.browserProfileDir === "string" && typeof mkJson.browserProfile?.ready === "boolean", JSON.stringify(mkJson.browserProfile));
   check("browser profile dir exists on disk", fs.existsSync(path.join(HOME, "profiles", "dex", "browser-profile")));
+  check("bot creation auto-creates workspace + downloads", fs.existsSync(path.join(HOME, "profiles", "dex", "workspace")) && fs.existsSync(path.join(HOME, "profiles", "dex", "workspace", "downloads")));
 
   // 3. initialize + tools/list (scope filtering: no admin tools for bot)
   const init = await rpc(dexToken, { jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2025-03-26" } });
@@ -102,7 +109,9 @@ try {
   check("computer_status ready", JSON.parse(st.json.result.content[0].text).state === "ready");
 
   const pc = await call(dexToken, "profile_current");
-  check("profile_current binds dex", JSON.parse(pc.json.result.content[0].text).profileSlug === "dex");
+  const pcJson = JSON.parse(pc.json.result.content[0].text);
+  check("profile_current binds dex", pcJson.profileSlug === "dex");
+  check("profile_current reports workspace", pcJson.workspace === path.join(HOME, "profiles", "dex", "workspace"), pcJson.workspace);
 
   // 5. Cross-profile rejection BEFORE any work
   const cross = await call(dexToken, "fs_list", { profile: "kai", path: "." });
@@ -126,15 +135,20 @@ try {
   const bres = JSON.parse(batch.json.result.content[0].text);
   const readBack = JSON.parse(bres.steps[1].result[0].text);
   check("batch write+read round-trips", readBack.content === "MANGO-9", JSON.stringify(bres).slice(0, 200));
+  check("fs_write lands in the workspace on disk", fs.readFileSync(path.join(HOME, "profiles", "dex", "workspace", "hello.txt"), "utf8") === "MANGO-9");
+  check("fs_write does not leak into the profile home", !fs.existsSync(path.join(HOME, "profiles", "dex", "hello.txt")));
 
-  // 8. fs confinement: escape attempt
+  // 8. fs confinement: escape attempts, including the sibling
+  // browser-profile directory (one level up from the workspace)
   const esc = await call(dexToken, "fs_read", { path: "../../etc/passwd" });
   check("fs escape rejected", esc.json.result.isError === true);
+  const esc2 = await call(dexToken, "fs_read", { path: "../browser-profile" });
+  check("fs escape to browser profile rejected", esc2.json.result.isError === true);
 
   // 9. terminal_exec
   const ex = await call(dexToken, "terminal_exec", { command: "echo hi-$AGENT_PROFILE && pwd" });
   const exJson = JSON.parse(ex.json.result.content[0].text);
-  check("terminal_exec runs in profile home", exJson.code === 0 && /hi-dex/.test(exJson.stdout) && exJson.stdout.includes("profiles/dex"));
+  check("terminal_exec runs in the workspace", exJson.code === 0 && /hi-dex/.test(exJson.stdout) && exJson.stdout.includes(path.join("profiles", "dex", "workspace")), exJson.stdout.slice(0, 160));
 
   // 10. REST fallback
   const rest = await fetch(`${BASE}/api/computers`, { headers: { authorization: `Bearer ${dexToken}` } });
@@ -206,6 +220,7 @@ try {
   const bots = await fetch(`${BASE}/api/ui/bots`, { headers: { authorization: `Bearer ${ownerToken}` } });
   const botsJson = await bots.json();
   const dexBot = botsJson.bots.find((b) => b.slug === "dex");
+  check("panel lists workspace path per bot", dexBot?.workspace === path.join(HOME, "profiles", "dex", "workspace"), dexBot?.workspace);
   const tokId = dexBot.tokens[0].id;
   await fetch(`${BASE}/api/ui/bots/x/revoke/${tokId}`, {
     method: "POST",
