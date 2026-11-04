@@ -321,6 +321,7 @@ async function handleUiApi(req, res, token, parts) {
         computer: store.data.computer,
         profiles: store.profiles().length,
         browser: await browserInfo(),
+        shell: shellSandboxStatus(),
         uptimeSec: Math.floor(process.uptime()),
       });
       return;

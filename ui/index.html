@@ -3,84 +3,472 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#EAE8E5">
 <title>Portal — bot control panel</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-  header { padding: 16px 20px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
-  h1 { font-size: 20px; margin: 0; }
-  main { max-width: 900px; margin: 0 auto; padding: 20px; }
-  .card { background: #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-  .card h2 { margin-top: 0; font-size: 16px; }
-  input, button, select { font-size: 14px; padding: 8px 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; }
-  button { cursor: pointer; background: #2563eb; border-color: #2563eb; color: #fff; }
-  button.secondary { background: #334155; border-color: #475569; }
-  button.danger { background: #b91c1c; border-color: #b91c1c; }
-  button:disabled { opacity: .5; cursor: default; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #334155; vertical-align: top; }
-  code { background: #0f172a; padding: 2px 6px; border-radius: 6px; word-break: break-all; font-size: 12px; }
-  .muted { color: #94a3b8; font-size: 13px; }
-  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
-  .ok { background: #22c55e; } .bad { background: #ef4444; } .idle { background: #94a3b8; }
-  #login { max-width: 420px; margin: 80px auto; }
-  .hidden { display: none; }
+  /*
+   * Portal panel, styled in hob's theme language: warm greige canvas,
+   * white floating surfaces, hairline borders, Inter, pill controls,
+   * accent #1677FF. Tokens mirror hob/web/src/index.css so the two
+   * products read as one family. No external assets: everything is
+   * inline, so the panel works offline on the laptop.
+   */
+  :root {
+    color-scheme: light;
+    --ink: #17191D;
+    --muted: #687588;
+    --soft: #51606F;
+    --faint: #8792A1;
+    --code: #253041;
+    --surface: #FFFFFF;
+    --canvas: #EAE8E5;
+    --panel: #FAFAFA;
+    --sunken: #F5F5F5;
+    --hover: #F1F5FB;
+    --idle-soft: #EEF1F4;
+    --accent: #1677FF;
+    --accent-strong: #0D6CE5;
+    --accent-soft: #E4EEFF;
+    --accent-line: #BBD5F8;
+    --ok: #0B7A52;
+    --ok-soft: #DDF6EC;
+    --ok-dot: #16CC8A;
+    --warn: #B54708;
+    --warn-soft: #FDE9DF;
+    --bad: #B42318;
+    --bad-soft: #FDE3E3;
+    --hair: rgba(25, 35, 50, 0.08);
+    --line: rgba(25, 35, 50, 0.06);
+    --edge: rgba(25, 35, 50, 0.1);
+    --edge-strong: rgba(25, 35, 50, 0.18);
+    --code-soft: #F0F2F5;
+    --font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --shadow-card: 0 1px 2px rgba(25, 35, 50, 0.04), 0 12px 32px rgba(25, 35, 50, 0.05);
+    --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.055);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.12); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.22); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { font-family: inherit; cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: 0.55; }
+  code {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--code);
+    background: var(--code-soft);
+    padding: 2px 6px;
+    border-radius: 6px;
+    overflow-wrap: anywhere;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--code);
+    background: var(--sunken);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow: auto;
+  }
+
+  /* Header: transparent, borderless, like hob's chat header. */
+  header {
+    max-width: 1024px;
+    margin: 0 auto;
+    padding: 22px 20px 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .brand { display: inline-flex; align-items: center; gap: 10px; user-select: none; }
+  .brand svg { display: block; }
+  .brand .wordmark { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+  .brand .wordmark i { font-style: normal; color: var(--accent); }
+  .brand .tag {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 9999px;
+    padding: 3px 8px;
+    margin-left: 2px;
+  }
+  .conn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 9999px;
+    padding: 6px 12px;
+    box-shadow: 0 1px 2px rgba(25, 35, 50, 0.04);
+    white-space: nowrap;
+  }
+  .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+  .conn.signed .dot { background: var(--ok-dot); }
+
+  main { max-width: 1024px; margin: 0 auto; padding: 14px 20px 56px; }
+
+  /* Cards: white floating surfaces on the greige canvas. */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 24px;
+    box-shadow: var(--shadow-card);
+    padding: 22px 24px;
+    margin-bottom: 16px;
+  }
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 4px;
+  }
+  .card h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .card h2 .count {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    color: var(--muted);
+    background: var(--idle-soft);
+    border-radius: 9999px;
+    padding: 2px 8px;
+    margin-left: 8px;
+    vertical-align: 2px;
+  }
+  .lede { margin: 6px 0 0; font-size: 13px; color: var(--muted); max-width: 68ch; }
+  .lede b { color: var(--soft); font-weight: 600; }
+  .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .hidden { display: none !important; }
+  .muted { color: var(--muted); font-size: 13px; }
+
+  /* Controls: pill inputs and buttons, hob's composer language. */
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; padding: 10px; border-radius: 8px; max-height: 300px; overflow: auto; font-size: 12px; }
+  input[type="text"], input[type="password"], input:not([type]) {
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--edge);
+    border-radius: 9999px;
+    padding: 9px 16px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input::placeholder { color: var(--faint); }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 9999px;
+    padding: 10px 16px;
+    border: 1px solid transparent;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-strong); }
+  .btn.secondary { background: var(--surface); color: var(--ink); border-color: var(--edge); }
+  .btn.secondary:hover { background: var(--hover); }
+  .btn.danger { background: var(--bad-soft); color: var(--bad); }
+  .btn.danger:hover { background: #FBD9D9; }
+  .btn.small { padding: 7px 12px; font-size: 12.5px; }
+  .btn.ghost { background: transparent; color: var(--soft); border-color: transparent; }
+  .btn.ghost:hover { background: var(--idle-soft); }
+
+  /* Status rows. */
+  .status-rows { display: grid; gap: 10px; margin-top: 14px; }
+  .status-row { display: flex; align-items: center; gap: 9px; font-size: 13.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.ok { background: var(--ok-dot); }
+  .dot.bad { background: var(--bad); }
+  .dot.idle { background: var(--faint); }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 9999px;
+    padding: 3px 9px;
+    white-space: nowrap;
+  }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.idle { background: var(--idle-soft); color: var(--muted); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .pill .dot { width: 6px; height: 6px; }
+  .meta { margin-top: 12px; font-size: 12.5px; color: var(--faint); }
+  #installLog { margin-top: 12px; }
+  #installLog.hidden { display: none; }
+
+  /* Callout for a freshly issued token. */
+  .callout {
+    margin-top: 14px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    border-radius: 14px;
+    padding: 12px 14px;
+    font-size: 13px;
+    color: var(--code);
+  }
+  .callout:empty { display: none; }
+  .callout code { background: var(--surface); }
+
+  /* Bot list: hob-style rows, 18px radius, grouped actions. */
+  .bot-list { display: grid; gap: 12px; margin-top: 16px; }
+  .bot {
+    border: 1px solid var(--hair);
+    border-radius: 18px;
+    background: var(--surface);
+    padding: 16px 18px;
+    transition: border-color 0.15s;
+  }
+  .bot:hover { border-color: var(--edge); }
+  .bot-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .bot-id { min-width: 0; flex: 1; }
+  .bot-name { font-size: 14.5px; font-weight: 600; letter-spacing: -0.005em; color: var(--ink); }
+  .bot-name .default-tag { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--idle-soft); border-radius: 9999px; padding: 2px 7px; margin-left: 6px; vertical-align: 1px; }
+  .bot-slug { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+  .bot-desc { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-path {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    background: var(--sunken);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 7px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ws-path .lbl { font-family: var(--font); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); flex: none; }
+  .bot-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 16px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .group-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+  .group-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tok-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 0; }
+  .tok-row + .tok-row { border-top: 1px dashed var(--line); }
+  .tok-name { font-family: var(--mono); font-size: 12.5px; color: var(--code); }
+  .revoked-tag { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--bad); }
+  .tok-reveal { flex-basis: 100%; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .tok-reveal:empty { display: none; }
+  .empty { padding: 8px 2px; color: var(--muted); font-size: 13px; }
+
+  /* Connect steps. */
+  .steps { margin: 16px 0 0; padding: 0; list-style: none; display: grid; gap: 12px; counter-reset: step; }
+  .steps li { display: flex; gap: 12px; font-size: 13.5px; color: var(--soft); }
+  .steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+  .steps li b { color: var(--ink); font-weight: 600; }
+
+  /* Activity. */
+  .activity { margin-top: 14px; }
+  .activity pre { max-height: 260px; }
+
+  /* Sign-in: one floating panel, centered. */
+  #login-wrap { display: flex; justify-content: center; padding-top: 9vh; }
+  #login { width: min(440px, 100%); }
+  #login.card { border-radius: 34px; box-shadow: var(--shadow-float); padding: 28px; }
+  .path-chip {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--sunken);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .path-chip code { background: transparent; padding: 0; }
+  #login .row { flex-wrap: nowrap; }
+  #login input { flex: 1; min-width: 0; }
+  #loginErr:empty { display: none; }
+  #loginErr { color: var(--bad); margin: 10px 0 0; }
+
+  @media (max-width: 640px) {
+    header { padding: 16px 16px 4px; }
+    .brand .tag { display: none; }
+    main { padding: 10px 14px 44px; }
+    .card { padding: 18px; border-radius: 20px; }
+    .bot-groups { grid-template-columns: 1fr; }
+    #login .row { flex-wrap: wrap; }
+    #login .row .btn { width: 100%; justify-content: center; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>💻 Portal</h1>
-  <span id="conn" class="muted">not signed in</span>
+  <span class="brand" aria-label="Portal">
+    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <rect width="32" height="32" rx="9" fill="#1677FF"/>
+      <path d="M10 22V14a6 6 0 0 1 12 0v8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+      <circle cx="16" cy="14" r="2.2" fill="#fff"/>
+      <rect x="9" y="22.5" width="14" height="2.2" rx="1.1" fill="#BBD5F8"/>
+    </svg>
+    <span class="wordmark">Portal<i>.</i></span>
+    <span class="tag">Bot control panel</span>
+  </span>
+  <span id="conn" class="conn"><span class="dot"></span><span id="connText">Not signed in</span></span>
 </header>
 <main>
-  <div id="login" class="card">
-    <h2>Owner sign-in</h2>
-    <p class="muted">Enter the owner token. It was printed when the server first started and lives in <code>~/.portal/vault.json</code> (owner-readable only). It never leaves this laptop.</p>
-    <div class="row">
-      <input id="ownerToken" type="password" placeholder="portal_owner_…" style="flex:1" autocomplete="off">
-      <button id="signInBtn">Sign in</button>
+  <div id="login-wrap">
+    <div id="login" class="card hidden">
+      <p class="eyebrow">Owner sign-in</p>
+      <h2>Welcome back</h2>
+      <p class="lede">Enter the owner token. It lives on this laptop and never leaves it.</p>
+      <div class="path-chip"><code>~/.portal/owner-token.txt</code><span>0600 · owner-readable only</span></div>
+      <div class="row" style="margin-top:16px">
+        <input id="ownerToken" type="password" placeholder="portal_owner_…" autocomplete="off">
+        <button id="signInBtn" class="btn primary">Sign in</button>
+      </div>
+      <p id="loginErr" class="muted"></p>
     </div>
-    <p id="loginErr" class="muted"></p>
   </div>
 
   <div id="app" class="hidden">
-    <div class="card">
-      <h2>Status</h2>
+    <section class="card" aria-label="Status">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">System</p>
+          <h2>Status</h2>
+        </div>
+      </div>
       <div id="status">Loading…</div>
-      <div class="row" style="margin-top:10px">
-        <button id="installBtn">Install / repair Camoufox</button>
+      <div class="row" style="margin-top:16px">
+        <button id="installBtn" class="btn primary">Install / repair Camoufox</button>
         <span id="installState" class="muted"></span>
       </div>
       <pre id="installLog" class="hidden"></pre>
-      <p class="muted">Camoufox is the stealth engine (patched Firefox, free, no key). If it is not installed, bots can still be added and tokens issued, but browser tools will return a clear “not installed” error until the install finishes. Install downloads the browser build once. On a minimal server it also needs three system libraries (libgtk-3, libx11-xcb, libasound2) — if the install log complains about a missing .so file, install those with apt and retry.</p>
-    </div>
+      <p class="lede" style="margin-top:14px">Camoufox is the stealth engine (patched Firefox, free, no key). If it is not installed, bots can still be added and tokens issued, but browser tools will return a clear “not installed” error until the install finishes. Install downloads the browser build once. On a minimal server it also needs three system libraries (libgtk-3, libx11-xcb, libasound2) — if the install log complains about a missing .so file, install those with apt and retry.</p>
+    </section>
 
-    <div class="card">
+    <section class="card" aria-label="Add a bot">
+      <p class="eyebrow">New bot</p>
       <h2>Add a bot</h2>
-      <p class="muted">One bot = one isolated browser profile (own cookies, logins, storage) + one unique token. Give the token to that bot in hob and it can only ever act as itself.</p>
-      <div class="row">
+      <p class="lede">One bot = one isolated browser profile (own cookies, logins, storage), one workspace folder, and one unique token. Give the token to that bot in hob and it can only ever act as itself.</p>
+      <div class="row" style="margin-top:16px">
         <input id="botName" placeholder="Bot name, e.g. Dex" maxlength="50">
-        <input id="botDesc" placeholder="Description (optional)" maxlength="200" style="flex:1">
-        <button id="addBotBtn">Add bot + create token</button>
+        <input id="botDesc" placeholder="Description (optional)" maxlength="200" style="flex:1; min-width:200px">
+        <button id="addBotBtn" class="btn primary">Add bot + create token</button>
       </div>
-      <p id="newToken" class="muted"></p>
-    </div>
+      <div id="newToken" class="callout"></div>
+    </section>
 
-    <div class="card">
-      <h2>Bots</h2>
+    <section class="card" aria-label="Bots">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Fleet</p>
+          <h2>Bots<span id="botCount" class="count hidden"></span></h2>
+        </div>
+      </div>
       <div id="bots">Loading…</div>
-    </div>
+    </section>
 
-    <div class="card">
+    <section class="card" aria-label="Connect a bot in hob">
+      <p class="eyebrow">Setup</p>
       <h2>Connect a bot in hob</h2>
-      <p class="muted">In that bot's Hermes profile config, set the MCP server <code>agent_computer</code> to URL <code id="mcpUrl">http://&lt;tailscale-ip&gt;:9879/mcp</code> with header <code>Authorization: Bearer &lt;that bot's token&gt;</code>. Then ask the bot to run <code>computer_list</code> — it should see one computer, <b>Portal</b>. Each bot's browser profile, files and shell stay inside its own folder and no bot can name another bot's profile. Full steps are in the README.</p>
-    </div>
+      <ol class="steps">
+        <li><span>In that bot's Hermes profile config, set the MCP server <code>agent_computer</code> to URL <code id="mcpUrl">http://&lt;tailscale-ip&gt;:9879/mcp</code> with header <code>Authorization: Bearer &lt;that bot's token&gt;</code>.</span></li>
+        <li><span>Ask the bot to run <code>computer_list</code> — it should see one computer, <b>Portal</b>.</span></li>
+        <li><span>Each bot's browser profile, files, and shell stay inside its own workspace folder, and no bot can name another bot's profile. Full steps are in the README.</span></li>
+      </ol>
+    </section>
 
-    <div class="card">
+    <section class="card" aria-label="Recent activity">
+      <p class="eyebrow">Audit</p>
       <h2>Recent activity</h2>
-      <div id="audit" class="muted">Loading…</div>
-    </div>
+      <div id="audit" class="activity muted">Loading…</div>
+    </section>
   </div>
 </main>
 <script>
@@ -97,22 +485,25 @@ async function api(path, opts = {}) {
   return j;
 }
 function showLogin(msg) {
-  $('login').classList.remove('hidden'); $('app').classList.add('hidden');
-  $('conn').textContent = 'not signed in';
+  $('login').classList.remove('hidden'); $('login-wrap').classList.remove('hidden'); $('app').classList.add('hidden');
+  $('conn').classList.remove('signed'); $('connText').textContent = 'Not signed in';
   if (msg) $('loginErr').textContent = msg;
 }
 function showApp() {
-  $('login').classList.add('hidden'); $('app').classList.remove('hidden');
-  $('conn').textContent = 'signed in as owner';
+  $('login').classList.add('hidden'); $('login-wrap').classList.add('hidden'); $('app').classList.remove('hidden');
+  $('conn').classList.add('signed'); $('connText').textContent = 'Signed in as owner';
 }
 async function refresh() {
   try {
     const s = await api('/api/ui/status');
     $('mcpUrl').textContent = `http://${s.tailscaleIp || '<tailscale-ip>'}:${s.port}/mcp`;
     $('status').innerHTML =
-      `<span class="dot ${s.browser.installed ? 'ok' : 'bad'}"></span> Camoufox: <b>${s.browser.installed ? 'installed' : 'NOT installed'}</b>` +
-      (s.browser.executable ? ` <code>${s.browser.executable}</code>` : '') +
-      `<br><span class="muted">Computer: ${s.computer.name} (${s.computer.id}) · ${s.profiles} profile(s) · uptime ${s.uptimeSec}s · v${s.version} · listening on ${s.host}:${s.port}</span>`;
+      `<div class="status-rows">` +
+      `<div class="status-row"><span class="dot ${s.browser.installed ? 'ok' : 'bad'}"></span><span>Camoufox: <b>${s.browser.installed ? 'installed' : 'NOT installed'}</b></span>` +
+      (s.browser.executable ? ` <code>${esc(s.browser.executable)}</code>` : '') + `</div>` +
+      `<div class="status-row"><span class="dot ${s.shell && s.shell.indexOf('bubblewrap') === 0 ? 'ok' : 'idle'}"></span><span>Shell sandbox: <b>${esc(s.shell || 'unknown')}</b></span></div>` +
+      `</div>` +
+      `<p class="meta">Computer: ${esc(s.computer.name)} (${esc(s.computer.id)}) · ${s.profiles} profile(s) · uptime ${s.uptimeSec}s · v${esc(s.version)} · listening on ${esc(s.host)}:${s.port}</p>`;
     const { bots } = await api('/api/ui/bots');
     renderBots(bots);
     const a = await api('/api/ui/audit');
@@ -124,23 +515,46 @@ async function refresh() {
   }
 }
 function renderBots(bots) {
-  if (!bots.length) { $('bots').innerHTML = '<p class="muted">No bots yet. Add one above.</p>'; return; }
-  $('bots').innerHTML = '<table><tr><th>Bot</th><th>Browser</th><th>Tokens</th><th>Actions</th></tr>' +
-    bots.map(b => `<tr>
-      <td><b>${esc(b.name)}</b><br><span class="muted">${esc(b.slug)}${b.isDefault ? ' · default' : ''}</span><br><span class="muted">${esc(b.description || '')}</span></td>
-      <td><span class="dot ${b.browserStarted ? 'ok' : 'idle'}"></span> ${b.browserStarted ? 'running' : 'stopped'}${b.browserUrl ? `<br><code>${esc(b.browserUrl)}</code>` : ''}<br>
-        <button class="secondary" data-act="bstart" data-id="${b.slug}">Start</button>
-        <button class="secondary" data-act="bstop" data-id="${b.slug}">Close</button>
-        <button class="secondary" data-act="view" data-id="${b.slug}">View live</button></td>
-      <td>${b.tokens.map(t => `<div><code>${esc(t.name)}</code> ${t.revoked ? '<b>REVOKED</b>' : ''}<br>
-        <button class="secondary" data-act="reveal" data-id="${t.id}">Show token</button>
-        ${t.revoked ? '' : `<button class="secondary" data-act="revoke" data-id="${t.id}">Revoke</button>`}
-        <span class="tok" id="tok-${t.id}"></span></div>`).join('')}</td>
-      <td>
-        <button class="secondary" data-act="newtok" data-id="${b.id}">New token</button>
-        <button class="secondary" data-act="rotate" data-id="${b.id}">Rotate (revoke old)</button>
-        <button class="danger" data-act="del" data-id="${b.id}" data-name="${esc(b.name)}">Delete bot</button>
-      </td></tr>`).join('') + '</table>';
+  const count = $('botCount');
+  count.textContent = bots.length ? bots.length + (bots.length === 1 ? ' bot' : ' bots') : '';
+  count.classList.toggle('hidden', !bots.length);
+  if (!bots.length) { $('bots').innerHTML = '<p class="empty">No bots yet. Add one above — each one gets its own browser profile, workspace, and token.</p>'; return; }
+  $('bots').innerHTML = '<div class="bot-list">' +
+    bots.map(b => `<article class="bot">
+      <div class="bot-top">
+        <span class="avatar" style="background:${esc(b.color || '#1677FF')}" aria-hidden="true">${esc((b.name || '?').slice(0, 1).toUpperCase())}</span>
+        <div class="bot-id">
+          <div class="bot-name">${esc(b.name)}${b.isDefault ? '<span class="default-tag">default</span>' : ''}</div>
+          <div class="bot-slug">${esc(b.slug)}</div>
+          ${b.description ? `<div class="bot-desc">${esc(b.description)}</div>` : ''}
+        </div>
+        <span class="pill ${b.browserStarted ? 'ok' : 'idle'}"><span class="dot ${b.browserStarted ? 'ok' : 'idle'}"></span>${b.browserStarted ? 'Browser running' : 'Browser stopped'}</span>
+        <button class="btn primary small" data-act="view" data-id="${esc(b.slug)}">View live</button>
+      </div>
+      ${b.workspace ? `<div class="ws-path" title="${esc(b.workspace)}"><span class="lbl">Workspace</span><span>${esc(b.workspace)}</span></div>` : ''}
+      ${b.browserUrl ? `<p class="meta" style="margin:8px 0 0">Browser: <code>${esc(b.browserUrl)}</code></p>` : ''}
+      <div class="bot-groups">
+        <div>
+          <p class="group-label">Browser</p>
+          <div class="group-actions">
+            <button class="btn secondary small" data-act="bstart" data-id="${esc(b.slug)}">Start</button>
+            <button class="btn secondary small" data-act="bstop" data-id="${esc(b.slug)}">Close</button>
+          </div>
+        </div>
+        <div>
+          <p class="group-label">Tokens</p>
+          ${b.tokens.map(t => `<div class="tok-row"><span class="tok-name">${esc(t.name)}</span>${t.revoked ? '<span class="revoked-tag">REVOKED</span>' : ''}<button class="btn ghost small" data-act="reveal" data-id="${t.id}">Show token</button>${t.revoked ? '' : `<button class="btn ghost small" data-act="revoke" data-id="${t.id}">Revoke</button>`}<span class="tok-reveal" id="tok-${t.id}"></span></div>`).join('')}
+        </div>
+        <div>
+          <p class="group-label">Manage</p>
+          <div class="group-actions">
+            <button class="btn secondary small" data-act="newtok" data-id="${b.id}">New token</button>
+            <button class="btn secondary small" data-act="rotate" data-id="${b.id}">Rotate (revoke old)</button>
+            <button class="btn danger small" data-act="del" data-id="${b.id}" data-name="${esc(b.name)}">Delete bot</button>
+          </div>
+        </div>
+      </div>
+    </article>`).join('') + '</div>';
   $('bots').querySelectorAll('button').forEach(btn => btn.addEventListener('click', onBotAction));
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -155,7 +569,7 @@ async function onBotAction(ev) {
     } else if (act === 'reveal') {
       const j = await api(`/api/ui/bots/x/token/${id}/reveal`);
       const el = $('tok-' + id);
-      el.innerHTML = ` <code>${esc(j.plaintext)}</code> <button class="secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(j.plaintext)});this.textContent='Copied'">Copy</button>`;
+      el.innerHTML = `<code>${esc(j.plaintext)}</code> <button class="btn secondary small" onclick="navigator.clipboard.writeText(${JSON.stringify(j.plaintext)});this.textContent='Copied'">Copy</button>`;
     } else if (act === 'revoke') {
       if (confirm('Revoke this token? The bot will lose access until it gets a new one.')) { await api(`/api/ui/bots/x/revoke/${id}`, { method: 'POST' }); await refresh(); }
     } else if (act === 'newtok') {
