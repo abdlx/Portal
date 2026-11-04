@@ -291,6 +291,7 @@ function runShell(command, workspace, profileSlug, timeoutS) {
 
     if (netguardSo) {
       flags.push("--ro-bind", netguardSo, "/tmp/libportal_netguard.so");
+      flags.push("--setenv", "LD_PRELOAD", "/tmp/libportal_netguard.so");
       sandboxEnv.LD_PRELOAD = "/tmp/libportal_netguard.so";
     }
 
@@ -308,7 +309,7 @@ function runShell(command, workspace, profileSlug, timeoutS) {
     // Reserve 1 CPU core for the host OS desktop/systemd, allowing bots
     // to dynamically utilize remaining cores (cores 1..N-1) under nice +10.
     const headroom = getSystemHeadroom();
-    let setup = "echo 500 > /proc/self/oom_score_adj 2>/dev/null || true; renice -n 10 $$ >/dev/null 2>&1 || true; ";
+    let setup = "export LD_PRELOAD=/tmp/libportal_netguard.so; echo 500 > /proc/self/oom_score_adj 2>/dev/null || true; renice -n 10 $$ >/dev/null 2>&1 || true; ";
     if (headroom.totalCores > 1) {
       setup += `taskset -cp 1-${headroom.totalCores - 1} $$ >/dev/null 2>&1 || true; `;
     }
