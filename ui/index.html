@@ -90,32 +90,59 @@
     overflow: auto;
   }
 
-  /* Header: transparent, borderless, like hob's chat header. */
-  header {
-    max-width: 1024px;
-    margin: 0 auto;
-    padding: 22px 20px 6px;
+  /* Sidebar: hob's left rail — brand, section nav, the live system
+     block, and sign-in state. Fixed on desktop, stacks on top on
+     narrow screens. */
+  .layout { display: flex; align-items: stretch; min-height: 100vh; }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 264px;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    padding: 22px 16px 18px;
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+    background: var(--canvas);
+    z-index: 1;
+  }
+  .content { flex: 1; min-width: 0; margin-left: 264px; }
+  .side-nav { display: grid; gap: 2px; }
+  .nav-link {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    text-decoration: none;
+    transition: background 0.15s;
   }
+  .nav-link:hover { background: var(--idle-soft); }
+  .nav-link.active { background: var(--accent-soft); color: var(--code); font-weight: 600; }
+  .nav-link svg { flex: none; color: var(--soft); }
+  .nav-link.active svg { color: var(--accent-strong); }
+  .nav-link .count {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    background: var(--idle-soft);
+    border-radius: 9999px;
+    padding: 2px 8px;
+  }
+  .nav-link.active .count { background: var(--surface); }
+  .side-system { margin-top: auto; }
+  .side-system .status-rows { margin-top: 10px; }
+  .side-system .meta { font-size: 12px; }
+  .side-foot { display: flex; }
   .brand { display: inline-flex; align-items: center; gap: 10px; user-select: none; }
   .brand svg { display: block; }
   .brand .wordmark { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
   .brand .wordmark i { font-style: normal; color: var(--accent); }
-  .brand .tag {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-    background: var(--surface);
-    border: 1px solid var(--hair);
-    border-radius: 9999px;
-    padding: 3px 8px;
-    margin-left: 2px;
-  }
   .conn {
     display: inline-flex;
     align-items: center;
@@ -133,7 +160,9 @@
   .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
   .conn.signed .dot { background: var(--ok-dot); }
 
-  main { max-width: 1024px; margin: 0 auto; padding: 14px 20px 56px; }
+  html { scroll-behavior: smooth; }
+  main { max-width: 960px; margin: 0 auto; padding: 22px 24px 56px; }
+  section.card { scroll-margin-top: 18px; }
 
   /* Cards: white floating surfaces on the greige canvas. */
   .card {
@@ -372,10 +401,21 @@
   #loginErr:empty { display: none; }
   #loginErr { color: var(--bad); margin: 10px 0 0; }
 
-  @media (max-width: 640px) {
-    header { padding: 16px 16px 4px; }
-    .brand .tag { display: none; }
-    main { padding: 10px 14px 44px; }
+  @media (max-width: 860px) {
+    .layout { flex-direction: column; }
+    .sidebar {
+      position: static;
+      width: auto;
+      border-right: none;
+      border-bottom: 1px solid var(--line);
+      padding: 16px 16px 14px;
+      gap: 16px;
+    }
+    .content { margin-left: 0; }
+    .side-nav { grid-auto-flow: column; grid-template-columns: none; overflow-x: auto; padding-bottom: 2px; }
+    .side-nav .nav-link { white-space: nowrap; }
+    .side-system { margin-top: 0; }
+    main { padding: 14px 14px 44px; }
     .card { padding: 18px; border-radius: 20px; }
     .bot-groups { grid-template-columns: 1fr; }
     #login .row { flex-wrap: wrap; }
@@ -383,24 +423,38 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition-duration: 0.01ms !important; }
+    html { scroll-behavior: auto; }
   }
 </style>
 </head>
 <body>
-<header>
-  <span class="brand" aria-label="Portal">
-    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <rect width="32" height="32" rx="9" fill="#1677FF"/>
-      <path d="M10 22V14a6 6 0 0 1 12 0v8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
-      <circle cx="16" cy="14" r="2.2" fill="#fff"/>
-      <rect x="9" y="22.5" width="14" height="2.2" rx="1.1" fill="#BBD5F8"/>
-    </svg>
-    <span class="wordmark">Portal<i>.</i></span>
-    <span class="tag">Bot control panel</span>
-  </span>
-  <span id="conn" class="conn"><span class="dot"></span><span id="connText">Not signed in</span></span>
-</header>
-<main>
+<div class="layout">
+  <aside class="sidebar">
+    <span class="brand" aria-label="Portal">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <rect width="32" height="32" rx="9" fill="#1677FF"/>
+        <path d="M10 22V14a6 6 0 0 1 12 0v8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="16" cy="14" r="2.2" fill="#fff"/>
+        <rect x="9" y="22.5" width="14" height="2.2" rx="1.1" fill="#BBD5F8"/>
+      </svg>
+      <span class="wordmark">Portal<i>.</i></span>
+    </span>
+    <nav id="sideNav" class="side-nav hidden" aria-label="Sections">
+      <a class="nav-link active" href="#sec-status"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Status</a>
+      <a class="nav-link" href="#sec-bots"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="8" width="14" height="10" rx="3"/><path d="M12 8V4"/><circle cx="9.5" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13" r="1" fill="currentColor" stroke="none"/></svg>Bots<span id="navBotCount" class="count hidden"></span></a>
+      <a class="nav-link" href="#sec-connect"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>Connect</a>
+      <a class="nav-link" href="#sec-activity"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>Activity</a>
+    </nav>
+    <div id="sideSystem" class="side-system hidden">
+      <p class="group-label">System</p>
+      <div id="status">Loading…</div>
+    </div>
+    <div class="side-foot">
+      <span id="conn" class="conn"><span class="dot"></span><span id="connText">Not signed in</span></span>
+    </div>
+  </aside>
+  <div class="content">
+  <main>
   <div id="login-wrap">
     <div id="login" class="card hidden">
       <p class="eyebrow">Owner sign-in</p>
@@ -416,14 +470,13 @@
   </div>
 
   <div id="app" class="hidden">
-    <section class="card" aria-label="Status">
+    <section class="card" id="sec-status" aria-label="Browser engine">
       <div class="section-head">
         <div>
           <p class="eyebrow">System</p>
-          <h2>Status</h2>
+          <h2>Browser engine</h2>
         </div>
       </div>
-      <div id="status">Loading…</div>
       <div class="row" style="margin-top:16px">
         <button id="installBtn" class="btn primary">Install / repair Camoufox</button>
         <span id="installState" class="muted"></span>
@@ -444,7 +497,7 @@
       <div id="newToken" class="callout"></div>
     </section>
 
-    <section class="card" aria-label="Bots">
+    <section class="card" id="sec-bots" aria-label="Bots">
       <div class="section-head">
         <div>
           <p class="eyebrow">Fleet</p>
@@ -454,7 +507,7 @@
       <div id="bots">Loading…</div>
     </section>
 
-    <section class="card" aria-label="Connect a bot in hob">
+    <section class="card" id="sec-connect" aria-label="Connect a bot in hob">
       <p class="eyebrow">Setup</p>
       <h2>Connect a bot in hob</h2>
       <ol class="steps">
@@ -464,13 +517,15 @@
       </ol>
     </section>
 
-    <section class="card" aria-label="Recent activity">
+    <section class="card" id="sec-activity" aria-label="Recent activity">
       <p class="eyebrow">Audit</p>
       <h2>Recent activity</h2>
       <div id="audit" class="activity muted">Loading…</div>
     </section>
   </div>
 </main>
+</div>
+</div>
 <script>
 const $ = (id) => document.getElementById(id);
 let ownerToken = sessionStorage.getItem('portal_owner') || '';
@@ -486,11 +541,14 @@ async function api(path, opts = {}) {
 }
 function showLogin(msg) {
   $('login').classList.remove('hidden'); $('login-wrap').classList.remove('hidden'); $('app').classList.add('hidden');
+  $('sideNav').classList.add('hidden'); $('sideSystem').classList.add('hidden');
+  $('status').innerHTML = '<p class="muted" style="margin:10px 0 0">Sign in to see system status.</p>';
   $('conn').classList.remove('signed'); $('connText').textContent = 'Not signed in';
   if (msg) $('loginErr').textContent = msg;
 }
 function showApp() {
   $('login').classList.add('hidden'); $('login-wrap').classList.add('hidden'); $('app').classList.remove('hidden');
+  $('sideNav').classList.remove('hidden'); $('sideSystem').classList.remove('hidden');
   $('conn').classList.add('signed'); $('connText').textContent = 'Signed in as owner';
 }
 async function refresh() {
@@ -518,6 +576,9 @@ function renderBots(bots) {
   const count = $('botCount');
   count.textContent = bots.length ? bots.length + (bots.length === 1 ? ' bot' : ' bots') : '';
   count.classList.toggle('hidden', !bots.length);
+  const navCount = $('navBotCount');
+  navCount.textContent = bots.length ? String(bots.length) : '';
+  navCount.classList.toggle('hidden', !bots.length);
   if (!bots.length) { $('bots').innerHTML = '<p class="empty">No bots yet. Add one above — each one gets its own browser profile, workspace, and token.</p>'; return; }
   $('bots').innerHTML = '<div class="bot-list">' +
     bots.map(b => `<article class="bot">
@@ -593,6 +654,10 @@ async function onBotAction(ev) {
   } catch (e) { alert('Error: ' + e.message); }
   btn.disabled = false;
 }
+document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', () => {
+  document.querySelectorAll('.nav-link').forEach(x => x.classList.remove('active'));
+  a.classList.add('active');
+}));
 $('signInBtn').addEventListener('click', async () => {
   ownerToken = $('ownerToken').value.trim();
   if (!ownerToken) return;
