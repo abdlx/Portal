@@ -546,26 +546,37 @@ export const TOOLS = [
   {
     name: "browser_click",
     scope: "browser",
-    description: "Click an element by its snapshot ref.",
-    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG, ref: { type: "string" } }, ["ref"]),
+    description:
+      "Click an element by its snapshot ref. Set stealth: true for login/submit/captcha to use humanized Bezier mouse curves.",
+    inputSchema: obj(
+      { ...COMPUTER_ARG, ...TAB_ARG, ref: { type: "string" }, stealth: { type: "boolean" } },
+      ["ref"],
+    ),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      return text(await ctx.browser.click(profile, args.ref, args.tab));
+      return text(await ctx.browser.click(profile, args.ref, args.tab, { stealth: args.stealth }));
     },
   },
   {
     name: "browser_fill",
     scope: "browser",
-    description: "Fill a text field (by snapshot ref) with text.",
+    description:
+      "Fill a text field (by snapshot ref) with text. Set stealth: true for passwords or sensitive inputs to simulate natural keystroke flight variance.",
     inputSchema: obj(
-      { ...COMPUTER_ARG, ...TAB_ARG, ref: { type: "string" }, text: { type: "string" } },
+      {
+        ...COMPUTER_ARG,
+        ...TAB_ARG,
+        ref: { type: "string" },
+        text: { type: "string" },
+        stealth: { type: "boolean" },
+      },
       ["ref", "text"],
     ),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      return text(await ctx.browser.fill(profile, args.ref, args.text, args.tab));
+      return text(await ctx.browser.fill(profile, args.ref, args.text, args.tab, { stealth: args.stealth }));
     },
   },
   {

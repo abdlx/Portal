@@ -21,7 +21,9 @@
 //     identity means stable navigator/screen/WebGL/fonts/timezone,
 //     not bit-identical pixels.
 //   - timezone Asia/Karachi + locale en-US + 1280x800 viewport,
-//   - humanize: true (human-like mouse movement, wrapper-level).
+//   - humanize: false at engine launch for CDP-level fast-path execution;
+//     stealth interactions (logins/captchas) use Asymmetric Humanization
+//     with cubic Bezier mouse curves and natural keystroke dynamics.
 // Engine patches live in the binary itself (C++ level); this layer
 // adds no JavaScript injection and no UA overrides.
 //
@@ -149,44 +151,144 @@ export async function browserInfo() {
   }
 }
 
-const SNAPSHOT_JS = `() => {
+export const SNAPSHOT_JS = `() => {
   const out = [];
   const seen = new Set();
   const sels = 'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="tab"], [contenteditable="true"], summary';
   const els = document.querySelectorAll(sels);
-  function xpathFor(el) {
+
+  function getSelector(el) {
+    if (el.id && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(el.id)) {
+      if (document.querySelectorAll('#' + el.id).length === 1) {
+        return '#' + el.id;
+      }
+    }
+    const name = el.getAttribute('name');
+    if (name && /^[a-zA-Z0-9_-]+$/.test(name)) {
+      const tagAndName = el.tagName.toLowerCase() + '[name="' + name + '"]';
+      if (document.querySelectorAll(tagAndName).length === 1) {
+        return tagAndName;
+      }
+    }
+    const aria = el.getAttribute('aria-label');
+    if (aria && aria.length < 50) {
+      const tagAndAria = el.tagName.toLowerCase() + '[aria-label=' + JSON.stringify(aria) + ']';
+      if (document.querySelectorAll(tagAndAria).length === 1) {
+        return tagAndAria;
+      }
+    }
+    // Fast shallow CSS path with hierarchical fallback
     const parts = [];
     let n = el;
-    while (n && n.nodeType === 1) {
-      if (n.id && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(n.id)) {
-        parts.unshift('*[@id=\"' + n.id + '\"]');
-        return '//' + parts.join('/');
+    while (n && n.nodeType === 1 && n !== document.documentElement) {
+      if (n.id && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(n.id) && document.querySelectorAll('#' + n.id).length === 1) {
+        parts.unshift('#' + n.id);
+        break;
       }
       const tag = n.tagName.toLowerCase();
       let idx = 1;
       let sib = n.previousElementSibling;
-      while (sib) { if (sib.tagName === n.tagName) idx++; sib = sib.previousElementSibling; }
-      parts.unshift(tag + '[' + idx + ']');
+      while (sib) {
+        if (sib.tagName === n.tagName) idx++;
+        sib = sib.previousElementSibling;
+      }
+      parts.unshift(tag + ':nth-of-type(' + idx + ')');
+      if (tag === 'body') break;
       n = n.parentElement;
     }
-    return '/' + parts.join('/');
+    return parts.join(' > ');
   }
+
   for (const el of els) {
     if (out.length >= 300) break;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) continue;
-    const cs = getComputedStyle(el);
-    if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-    const xp = xpathFor(el);
-    if (seen.has(xp)) continue;
-    seen.add(xp);
-    const text = (el.innerText || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+    // Native C++ visibility check: zero layout reflow
+    if (typeof el.checkVisibility === 'function') {
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+    } else {
+      if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+    }
+
+    const sel = getSelector(el);
+    if (seen.has(sel)) continue;
+    seen.add(sel);
+
+    // textContent reads internal node text without forcing reflow like innerText
+    const text = (el.textContent || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
     const name = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || text || el.tagName).slice(0, 80);
     const role = el.getAttribute('role') || ({A:'link',BUTTON:'button',INPUT:'textbox',SELECT:'combobox',TEXTAREA:'textbox',SUMMARY:'button'}[el.tagName] || el.tagName.toLowerCase());
-    out.push({ tag: el.tagName.toLowerCase(), role, name, text, xpath: xp, disabled: !!el.disabled, checked: el.checked === true });
+
+    out.push({
+      tag: el.tagName.toLowerCase(),
+      role,
+      name,
+      text,
+      selector: sel,
+      disabled: !!el.disabled,
+      checked: el.checked === true,
+      isPassword: el.type === 'password'
+    });
   }
   return out;
 }`;
+
+// Helper for cubic Bezier mouse curve and humanized interactions (Asymmetric Humanization)
+export async function humanMoveAndClick(page, locator) {
+  const box = await locator.boundingBox();
+  if (!box) {
+    await locator.click({ force: true });
+    return;
+  }
+  // Target coordinates randomized inside 20%-80% of bounding box
+  const targetX = box.x + box.width * (0.2 + Math.random() * 0.6);
+  const targetY = box.y + box.height * (0.2 + Math.random() * 0.6);
+
+  const startX = page._lastMouseX ?? Math.max(0, box.x + (Math.random() - 0.5) * 200);
+  const startY = page._lastMouseY ?? Math.max(0, box.y + (Math.random() - 0.5) * 200);
+
+  const dx = targetX - startX;
+  const dy = targetY - startY;
+  const dist = Math.hypot(dx, dy);
+
+  // Perpendicular deviation for control points
+  const perpX = -dy * 0.2 * (Math.random() - 0.5);
+  const perpY = dx * 0.2 * (Math.random() - 0.5);
+
+  const p1X = startX + dx * 0.3 + perpX;
+  const p1Y = startY + dy * 0.3 + perpY;
+  const p2X = startX + dx * 0.7 + perpX * 0.5;
+  const p2Y = startY + dy * 0.7 + perpY * 0.5;
+
+  const steps = Math.max(12, Math.min(25, Math.floor(dist / 25)));
+  for (let i = 1; i <= steps; i++) {
+    const rawT = i / steps;
+    // Cubic ease-out curve (Fitts's Law approximation: quick start, smooth deceleration)
+    const t = 1 - Math.pow(1 - rawT, 3);
+    const oneMinusT = 1 - t;
+
+    const curX =
+      Math.pow(oneMinusT, 3) * startX +
+      3 * Math.pow(oneMinusT, 2) * t * p1X +
+      3 * oneMinusT * Math.pow(t, 2) * p2X +
+      Math.pow(t, 3) * targetX;
+    const curY =
+      Math.pow(oneMinusT, 3) * startY +
+      3 * Math.pow(oneMinusT, 2) * t * p1Y +
+      3 * oneMinusT * Math.pow(t, 2) * p2Y +
+      Math.pow(t, 3) * targetY;
+
+    await page.mouse.move(curX, curY);
+    await new Promise((r) => setTimeout(r, 8 + Math.random() * 6));
+  }
+
+  page._lastMouseX = targetX;
+  page._lastMouseY = targetY;
+
+  // Hover dwell
+  await new Promise((r) => setTimeout(r, 50 + Math.random() * 50));
+  await page.mouse.down();
+  await new Promise((r) => setTimeout(r, 60 + Math.random() * 50));
+  await page.mouse.up();
+}
 
 export class BrowserManager {
   constructor(store) {
@@ -582,12 +684,25 @@ export class BrowserManager {
         os: "linux",
         locale: "en-US",
         fingerprint,
-        humanize: true,
+        humanize: false,
         // Pinning the fingerprint is the design (stable identity per bot);
         // this silences Camoufox's "not recommended" LeakWarning.
         i_know_what_im_doing: true,
         timezoneId: "Asia/Karachi",
         viewport: { width: VIEW_WIDTH, height: VIEW_HEIGHT },
+        firefox_user_prefs: {
+          "toolkit.cosmeticAnimations.enabled": false,
+          "general.smoothScroll": false,
+          "image.animation_mode": "once",
+          "browser.cache.disk.enable": false,
+          "browser.cache.memory.enable": true,
+          "browser.cache.memory.capacity": 1048576,
+          "browser.sessionstore.interval": 600000,
+          "datareporting.policy.dataSubmissionEnabled": false,
+          "toolkit.telemetry.enabled": false,
+          "browser.ping-centre.telemetry": false,
+          ...(opts.firefox_user_prefs || {}),
+        },
         ...(process.env.CAMOUFOX_EXECUTABLE
           ? { executable_path: process.env.CAMOUFOX_EXECUTABLE }
           : {}),
@@ -714,10 +829,11 @@ export class BrowserManager {
         const refs = new Map();
         const lines = items.map((it, i) => {
           const ref = `e${i + 1}`;
-          refs.set(ref, it.xpath);
+          refs.set(ref, it.selector || it.xpath);
           const extra = [
             it.disabled ? "disabled" : "",
             it.checked ? "checked" : "",
+            it.isPassword ? "password" : "",
           ]
             .filter(Boolean)
             .join(" ");
@@ -739,24 +855,36 @@ export class BrowserManager {
   }
 
   async #resolveRef(e, ref) {
-    const xpath = e.refs.get(ref);
-    if (!xpath) {
+    const sel = e.refs.get(ref);
+    if (!sel) {
       throw new Error(
         `unknown ref: ${ref}. Take a fresh browser_snapshot first — refs go stale after the page changes.`,
       );
     }
-    return xpath;
+    return sel;
   }
 
-  async click(profile, ref, tab) {
+  async click(profile, ref, tab, opts = {}) {
+    if (typeof tab === "object" && tab !== null && opts && Object.keys(opts).length === 0) {
+      opts = tab;
+      tab = undefined;
+    }
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
       const tabId = e.tabs.get(pg);
       this.#touchTab(e, tabId, true);
       try {
-        const xpath = await this.#resolveRef(e, ref);
-        await pg.locator(`xpath=${xpath}`).first().click({ timeout: 10000 });
+        const sel = await this.#resolveRef(e, ref);
+        const loc = (sel.startsWith("/") || sel.startsWith("xpath="))
+          ? pg.locator(sel.startsWith("xpath=") ? sel : `xpath=${sel}`).first()
+          : pg.locator(sel).first();
+        if (opts.stealth) {
+          await humanMoveAndClick(pg, loc);
+        } else {
+          // Fast-path: bypass actionability and animation waits
+          await loc.click({ force: true, noWaitAfter: true, timeout: 5000 });
+        }
         return { ok: true, ref, tab: tabId, url: pg.url() };
       } finally {
         this.#touchTab(e, tabId, false);
@@ -764,24 +892,40 @@ export class BrowserManager {
     });
   }
 
-  async fill(profile, ref, text, tab) {
+  async fill(profile, ref, text, tab, opts = {}) {
+    if (typeof tab === "object" && tab !== null && opts && Object.keys(opts).length === 0) {
+      opts = tab;
+      tab = undefined;
+    }
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
       const pg = await this.#activePage(e, tab);
       const tabId = e.tabs.get(pg);
       this.#touchTab(e, tabId, true);
       try {
-        const xpath = await this.#resolveRef(e, ref);
-        const loc = pg.locator(`xpath=${xpath}`).first();
-        try {
-          await loc.fill(text, { timeout: 10000 });
-        } catch {
+        const sel = await this.#resolveRef(e, ref);
+        const loc = (sel.startsWith("/") || sel.startsWith("xpath="))
+          ? pg.locator(sel.startsWith("xpath=") ? sel : `xpath=${sel}`).first()
+          : pg.locator(sel).first();
+        if (opts.stealth) {
+          await loc.click({ timeout: 5000 });
+          await pg.keyboard.press("Control+a");
+          await pg.keyboard.press("Backspace");
+          for (const char of text) {
+            await pg.keyboard.type(char, { delay: 60 + Math.random() * 80 });
+          }
+        } else {
+          // Fast-path: instant value assignment
           try {
-            await loc.selectOption({ label: text }, { timeout: 5000 });
+            await loc.fill(text, { force: true, timeout: 5000 });
           } catch {
-            await loc.click({ timeout: 10000 });
-            await pg.keyboard.press("Control+a");
-            await pg.keyboard.type(text);
+            try {
+              await loc.selectOption({ label: text }, { timeout: 5000 });
+            } catch {
+              await loc.click({ force: true, timeout: 5000 });
+              await pg.keyboard.press("Control+a");
+              await pg.keyboard.type(text);
+            }
           }
         }
         return { ok: true, ref, tab: tabId };
