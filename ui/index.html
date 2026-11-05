@@ -442,6 +442,7 @@
     <nav id="sideNav" class="side-nav hidden" aria-label="Sections">
       <a class="nav-link active" href="#sec-status"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Status</a>
       <a class="nav-link" href="#sec-bots"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="8" width="14" height="10" rx="3"/><path d="M12 8V4"/><circle cx="9.5" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13" r="1" fill="currentColor" stroke="none"/></svg>Bots<span id="navBotCount" class="count hidden"></span></a>
+      <a class="nav-link" href="#sec-vault">Vaultwarden</a>
       <a class="nav-link" href="#sec-connect"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>Connect</a>
       <a class="nav-link" href="#sec-activity"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>Activity</a>
     </nav>
@@ -507,6 +508,21 @@
       <div id="bots">Loading…</div>
     </section>
 
+    <section class="card" id="sec-vault" aria-label="Vaultwarden credential accounts">
+      <p class="eyebrow">Secrets</p>
+      <h2>Vaultwarden</h2>
+      <p class="lede">Each bot connects to a separate Bitwarden-compatible account through the server-side CLI. Master passwords and raw secrets never appear in agent tool responses. Set up the account with <code>bw</code> on the Portal host first (see README). Session keys are held in memory and cleared on restart.</p>
+      <div class="row" style="margin-top:14px">
+        <select id="vaultProfile" aria-label="Bot profile"></select>
+        <input id="vaultSession" type="password" placeholder="Paste BW_SESSION for selected bot" autocomplete="off" style="flex:1;min-width:210px">
+        <button class="btn primary" id="vaultUnlock">Unlock</button>
+        <button class="btn secondary" id="vaultLock">Lock</button>
+        <button class="btn secondary" id="vaultSync">Sync</button>
+      </div>
+      <p class="muted" id="vaultStatus" style="margin:10px 0"></p>
+      <div id="vaultItems" class="muted"></div>
+    </section>
+
     <section class="card" id="sec-connect" aria-label="Connect a bot in hob">
       <p class="eyebrow">Setup</p>
       <h2>Connect a bot in hob</h2>
@@ -564,6 +580,10 @@ async function refresh() {
       `<p class="meta">Computer: ${esc(s.computer.name)} (${esc(s.computer.id)}) · ${s.profiles} profile(s) · uptime ${s.uptimeSec}s · v${esc(s.version)} · listening on ${esc(s.host)}:${s.port}</p>`;
     const { bots } = await api('/api/ui/bots');
     renderBots(bots);
+    const chooser = $('vaultProfile');
+    const selected = chooser.value;
+    chooser.innerHTML = bots.map(b => `<option value="${esc(b.slug)}">${esc(b.name)}</option>`).join('');
+    if (bots.some(b => b.slug === selected)) chooser.value = selected;
     const a = await api('/api/ui/audit');
     $('audit').innerHTML = a.entries.length
       ? '<pre>' + a.entries.slice(-20).reverse().map(e => `${new Date(e.at).toLocaleTimeString()}  ${e.kind || ''}  ${e.tool || ''}  ${e.token || ''}  ${e.profile || ''}`).join('\n') + '</pre>'
@@ -658,6 +678,32 @@ document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', 
   document.querySelectorAll('.nav-link').forEach(x => x.classList.remove('active'));
   a.classList.add('active');
 }));
+async function vaultAction(action) {
+  const slug = $('vaultProfile').value;
+  if (!slug) return;
+  try {
+    const data = await api('/api/ui/vaultwarden/' + encodeURIComponent(slug), {
+      method: 'POST',
+      body: JSON.stringify({ action, ...(action === 'unlock' ? { session: $('vaultSession').value.trim() } : {}) })
+    });
+    $('vaultSession').value = '';
+    $('vaultStatus').textContent = data.unlocked ? 'Unlocked in Portal memory' : 'Locked';
+    if (data.unlocked) {
+      const { items } = await api('/api/ui/vaultwarden/' + encodeURIComponent(slug) + '/items');
+      $('vaultItems').innerHTML = items.map(item => '<div class="tok-row"><b>' + esc(item.name) + '</b> <code>' + esc(item.id) + '</code> ' + esc(item.origins.join(', ')) + '</div>').join('') || 'No login items saved.';
+    } else $('vaultItems').textContent = '';
+  } catch (err) { $('vaultStatus').textContent = err.message; }
+}
+$('vaultUnlock').addEventListener('click', () => vaultAction('unlock'));
+$('vaultLock').addEventListener('click', () => vaultAction('lock'));
+$('vaultSync').addEventListener('click', () => vaultAction('sync'));
+$('vaultProfile').addEventListener('change', async () => {
+  $('vaultItems').textContent = '';
+  const slug = $('vaultProfile').value;
+  if (!slug) return;
+  try { const state = await api('/api/ui/vaultwarden/' + encodeURIComponent(slug)); $('vaultStatus').textContent = state.unlocked ? 'Unlocked' : 'Locked'; }
+  catch (e) { $('vaultStatus').textContent = e.message; }
+});
 $('signInBtn').addEventListener('click', async () => {
   ownerToken = $('ownerToken').value.trim();
   if (!ownerToken) return;
