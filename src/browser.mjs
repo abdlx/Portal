@@ -36,6 +36,9 @@ import path from "node:path";
 import { startDisplay, stopDisplay, VIEW_WIDTH, VIEW_HEIGHT } from "./vnc.mjs";
 import { getSystemHeadroom } from "./tools.mjs";
 
+const IDLE_SLEEP_MS = Math.max(60_000, Number(process.env.PORTAL_BROWSER_IDLE_SLEEP_MINUTES || 30) * 60_000);
+const SESSION_FILE = "open-tabs.json";
+
 const MISSING_MSG =
   "Camoufox is not installed yet. Run `npx camoufox fetch` in the app directory (downloads the browser build once), or press Install / repair Camoufox in the Portal panel, then try again.";
 const LIBS_MSG =
@@ -295,9 +298,10 @@ export class BrowserManager {
     this.store = store;
     this.contexts = new Map(); // slug -> { context, page, refs: Map, chain: Promise, tabs, tabCounter, active, refMaps, tabMeta }
     this.starting = new Map();
-    // Automated 2-hour idle tab cleanup (runs every 60s)
+    this.closing = new Map();
+    // Profile-level hibernation takes precedence over old per-tab idle eviction.
     this.idleCleanupTimer = setInterval(() => {
-      this.cleanIdleTabs().catch(() => {});
+      this.sleepIdleBrowsers().catch((err) => console.warn("[portal] idle sleep:", err.message));
     }, 60000).unref();
   }
 
@@ -309,12 +313,111 @@ export class BrowserManager {
   }
 
   #chain(slug, fn) {
-    const prev = this.contexts.get(slug)?.chain || Promise.resolve();
-    const next = prev.then(fn, fn);
     const entry = this.contexts.get(slug);
-    if (entry) entry.chain = next;
-    else this.contexts.set(slug, { context: null, page: null, refs: new Map(), chain: next, tabs: new Map(), tabCounter: 0, active: null, refMaps: new Map(), tabMeta: new Map() });
+    if (!entry?.context) throw new Error("browser is not started");
+    this.#touch(entry);
+    entry.pendingOps = (entry.pendingOps || 0) + 1;
+    const prev = entry.chain || Promise.resolve();
+    const next = prev.then(fn, fn).finally(() => {
+      entry.pendingOps--;
+      this.#touch(entry);
+    });
+    entry.chain = next;
     return next;
+  }
+
+  #touch(entry) {
+    entry.lastActivityAt = Date.now();
+  }
+
+  viewerConnected(profile) {
+    const entry = this.contexts.get(profile.slug);
+    if (entry?.context) {
+      entry.viewers = (entry.viewers || 0) + 1;
+      this.#touch(entry);
+    }
+  }
+
+  viewerDisconnected(profile) {
+    const entry = this.contexts.get(profile.slug);
+    if (entry?.context) {
+      entry.viewers = Math.max(0, (entry.viewers || 0) - 1);
+      this.#touch(entry);
+    }
+  }
+
+  viewerActivity(profile) {
+    const entry = this.contexts.get(profile.slug);
+    if (entry?.context) this.#touch(entry);
+  }
+
+  #sessionPath(slug) {
+    return path.join(this.store.profileHome(slug), SESSION_FILE);
+  }
+
+  #saveOpenTabs(slug, entry) {
+    this.#syncPages(entry);
+    const pages = entry.context.pages();
+    const tabs = pages.map((pg) => pg.url()).filter((url) => url && url !== "about:blank");
+    const activeIndex = Math.max(0, pages.indexOf(entry.active));
+    // Stored next to the persistent browser profile, outside the agent workspace.
+    const file = this.#sessionPath(slug);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(temp, JSON.stringify({
+        version: 1, tabs, activeIndex, headed: !!entry.headed, savedAt: Date.now(),
+      }), { mode: 0o600 });
+      fs.renameSync(temp, file);
+    } finally {
+      if (fs.existsSync(temp)) fs.unlinkSync(temp);
+    }
+  }
+
+  async #restoreOpenTabs(slug, entry) {
+    let saved;
+    try {
+      saved = JSON.parse(fs.readFileSync(this.#sessionPath(slug), "utf8"));
+    } catch {
+      return;
+    }
+    if (!Array.isArray(saved?.tabs)) return;
+    const urls = saved.tabs.filter((url) => {
+      if (typeof url !== "string" || url.length > 8192) return false;
+      return /^(https?:|file:|about:)/i.test(url) && url !== "about:blank";
+    }).slice(0, 50);
+    if (!urls.length) return;
+    const first = entry.context.pages()[0] || await entry.context.newPage();
+    for (let i = 0; i < urls.length; i++) {
+      const pg = i === 0 ? first : await entry.context.newPage();
+      this.#tabIdFor(entry, pg);
+      try {
+        await pg.goto(urls[i], { waitUntil: "domcontentloaded", timeout: 20000 });
+      } catch (err) {
+        console.warn(`[portal] restore tab ${i + 1} in ${slug}: ${err.message}`);
+      }
+    }
+    const index = Math.min(Math.max(Number(saved.activeIndex) || 0, 0), urls.length - 1);
+    // Active tab indexing refers to the original pages, but blank tabs are excluded.
+    entry.active = entry.context.pages()[index] || first;
+    this.#syncPages(entry);
+  }
+
+  async sleepIdleBrowsers(maxIdleMs = IDLE_SLEEP_MS) {
+    const slept = [];
+    for (const [slug, entry] of this.contexts) {
+      if (!entry?.context || this.starting.has(slug) || this.closing.has(slug)) continue;
+      if ((entry.viewers || 0) > 0 || (entry.pendingOps || 0) > 0) continue;
+      if (Date.now() - (entry.lastActivityAt || Date.now()) < maxIdleMs) continue;
+      this.#syncPages(entry);
+      // Never interrupt in-flight page requests, downloads, or automation.
+      if ([...entry.tabs.values()].some((id) => this.isTabProcessing(entry, id))) continue;
+      const profile = this.store.profileBySlug(slug);
+      if (!profile) continue;
+      await this.close(profile, { reason: "idle" });
+      slept.push(slug);
+    }
+    return slept;
   }
 
   // ---- tabs ---------------------------------------------------------------
@@ -603,11 +706,14 @@ export class BrowserManager {
   // (the on-disk profile, cookies and logins survive the relaunch).
   async ensure(profile, opts = {}) {
     const slug = profile.slug;
+    if (this.closing.has(slug)) await this.closing.get(slug);
+    if (this.starting.has(slug)) return this.starting.get(slug);
     const existing = this.contexts.get(slug);
     if (existing?.context) {
       if (opts.headed && !existing.headed) {
         await this.close(profile);
       } else {
+        this.#touch(existing);
         return existing;
       }
     }
@@ -625,7 +731,6 @@ export class BrowserManager {
         );
       }
     }
-    if (this.starting.has(slug)) return this.starting.get(slug);
     const p = this.#start(profile, opts);
     this.starting.set(slug, p);
     try {
@@ -741,10 +846,16 @@ export class BrowserManager {
     context.on("page", attachDownloads);
     for (const pg of context.pages()) attachDownloads(pg);
     const page = context.pages()[0] || (await context.newPage());
-    const entry = { context, page, refs: new Map(), chain: Promise.resolve(), tabs: new Map(), tabCounter: 0, active: page, refMaps: new Map(), headed: !!opts.headed, display };
+    const entry = { context, page, refs: new Map(), chain: Promise.resolve(), tabs: new Map(), tabCounter: 0, active: page, refMaps: new Map(), headed: !!opts.headed, display, lastActivityAt: Date.now(), pendingOps: 0, viewers: 0 };
     this.contexts.set(profile.slug, entry);
     const firstTab = this.#tabIdFor(entry, page);
     entry.refMaps.set(firstTab, entry.refs);
+    try {
+      await this.#restoreOpenTabs(profile.slug, entry);
+    } catch (err) {
+      console.warn(`[portal] restore session for ${profile.slug}: ${err.message}`);
+    }
+    this.#touch(entry);
     return entry;
   }
 
@@ -767,21 +878,35 @@ export class BrowserManager {
     }
   }
 
-  async close(profile) {
-    const e = this.contexts.get(profile.slug);
-    if (e?.context) {
-      try {
+  async close(profile, { reason = "manual" } = {}) {
+    const slug = profile.slug;
+    if (this.closing.has(slug)) return this.closing.get(slug);
+    const task = (async () => {
+      if (this.starting.has(slug)) await this.starting.get(slug).catch(() => {});
+      const e = this.contexts.get(slug);
+      if (e?.context) {
+        // Complete queued agent actions before checkpointing and terminating.
+        await (e.chain || Promise.resolve()).catch(() => {});
+        try {
+          this.#saveOpenTabs(slug, e);
+        } catch (err) {
+          // Refuse to sleep rather than silently lose the user's open tabs.
+          throw new Error(`Cannot save browser tabs for ${slug}: ${err.message}`);
+        }
         await e.context.close();
-      } catch {
-        /* already closed */
       }
+      if (this.contexts.get(slug) === e) this.contexts.delete(slug);
+      // Xvnc must also exit: asleep profiles consume no browser/display CPU or RAM.
+      await stopDisplay(slug);
+      console.log(`[portal] browser ${slug} closed (${reason})`);
+      return { closed: true, sleeping: reason === "idle", profile: slug };
+    })();
+    this.closing.set(slug, task);
+    try {
+      return await task;
+    } finally {
+      this.closing.delete(slug);
     }
-    this.contexts.delete(profile.slug);
-    // The display belongs to the browser session: no browser, no view.
-    // Awaited: a lingering Xvnc would hold its display number and
-    // poison the next allocation (see vnc.mjs).
-    await stopDisplay(profile.slug);
-    return { closed: true, profile: profile.slug };
   }
 
   async navigate(profile, url, opts = {}) {
