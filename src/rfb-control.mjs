@@ -31,7 +31,7 @@ export class RfbClientFilter {
       else if (type === 5) length = 6; // PointerEvent
       else if (type === 6) {
         if (b.length < 8) break;
-        length = 8 + b.readUInt32BE(4); // ClientCutText
+        length = 8 + Math.abs(b.readInt32BE(4)); // ClientCutText / extended clipboard
       } else if (type === 150) {
         // Extended clipboard and vendor extensions cannot bypass input filtering.
         throw new Error("Unsupported RFB client extension");
