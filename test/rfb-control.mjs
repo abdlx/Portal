@@ -20,3 +20,15 @@ assert.deepEqual(f.push(key.subarray(3)), [], "split packet dropped");
 assert.deepEqual(Buffer.concat(f.push(update)), update, "viewer continues receiving updates");
 
 console.log("PASS RFB control lease input filter");
+
+const extensions = new RfbClientFilter(() => false);
+extensions.push(handshake);
+const continuous = Buffer.from([150, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+const fence = Buffer.from([248, 0, 0, 0, 0, 0, 0, 0, 0]);
+const resize = Buffer.from([251, 0, 5, 0, 4, 0, 0, 0]);
+assert.deepEqual(Buffer.concat(extensions.push(Buffer.concat([continuous, fence, resize, update]))),
+  Buffer.concat([continuous, fence, update]), "viewer extensions must not disconnect, resize stays blocked");
+const signedClipboard = Buffer.from([6, 0, 0, 0, 255, 255, 255, 255, 99]);
+assert.deepEqual(extensions.push(signedClipboard), [], "extended clipboard is not allowed in view-only mode");
+assert.deepEqual(Buffer.concat(extensions.push(update)), update, "viewer still works after clipboard packet");
+console.log("PASS noVNC extensions and clipboard isolation");
