@@ -50,8 +50,9 @@ export class CredentialVault {
   }
 
   #file(profile) {
-    if (!SLUG.test(profile.slug)) throw new Error("Invalid profile slug");
-    return path.join(this.dir, profile.slug + ".enc");
+    if (!SLUG.test(profile.slug) || !/^prof_[a-f0-9]{8}$/.test(profile.id)) throw new Error("Invalid profile identity");
+    // Stable identity, unaffected by renaming the bot slug.
+    return path.join(this.dir, profile.id + ".enc");
   }
 
   #key(profile) {
