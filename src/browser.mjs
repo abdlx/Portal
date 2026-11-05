@@ -860,11 +860,18 @@ export class BrowserManager {
     this.contexts.set(profile.slug, entry);
     const firstTab = this.#tabIdFor(entry, page);
     entry.refMaps.set(firstTab, entry.refs);
-    try {
-      await this.#restoreOpenTabs(profile.slug, entry);
-    } catch (err) {
-      console.warn(`[portal] restore session for ${profile.slug}: ${err.message}`);
-    }
+    // Restore saved tabs after the display/browser becomes available.
+    // Waiting for every external website here can exceed the reverse-proxy
+    // WebSocket upgrade deadline and produce a misleading VNC 1006.
+    entry.pendingOps++;
+    entry.chain = Promise.resolve().then(() => this.#restoreOpenTabs(profile.slug, entry))
+      .catch((err) => {
+        console.warn(`[portal] restore session for ${profile.slug}: ${err.message}`);
+      })
+      .finally(() => {
+        entry.pendingOps--;
+        this.#touch(entry);
+      });
     this.#touch(entry);
     return entry;
   }
