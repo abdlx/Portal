@@ -139,7 +139,14 @@
 
   let rfb = null;
   function connect() {
-    if (rfb) { try { rfb.disconnect(); } catch {} rfb = null; }
+    if (rfb) {
+      try {
+        if (rfb._rfbConnectionState && rfb._rfbConnectionState !== 'disconnected') {
+          rfb.disconnect();
+        }
+      } catch {}
+      rfb = null;
+    }
     screenEl.innerHTML = '';
     if (!token) {
       statusEl.textContent = 'No token in the URL. Open this view from the Portal panel.';

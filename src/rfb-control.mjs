@@ -54,6 +54,10 @@ export class RfbClientFilter {
           length = 8 + b[6] * 16;
           control = true;
           break;
+        case 255: // QEMU Extended Key Event
+          length = 12;
+          control = true;
+          break;
         default:
           // Unknown extensions cannot be safely framed. Fail closed with
           // diagnostics instead of forwarding potentially privileged input.
