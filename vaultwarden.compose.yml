@@ -1,0 +1,15 @@
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: portal-vaultwarden
+    restart: unless-stopped
+    environment:
+      DOMAIN: "http://localhost:8222"
+      SIGNUPS_ALLOWED: "true" # Disable after creating the separate bot accounts.
+      WEBSOCKET_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8222:80"
+    volumes:
+      - "${HOME}/.portal/vaultwarden-server:/data"
+    security_opt:
+      - no-new-privileges:true
