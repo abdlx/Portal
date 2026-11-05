@@ -25,6 +25,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { RfbClientFilter } from "./rfb-control.mjs";
 import { Store, hashToken } from "./store.mjs";
 import { BrowserManager, browserInfo, resetBrowserCache } from "./browser.mjs";
 import { TOOLS, toolByName, hasScope, text, errText, shellSandboxStatus, getSystemHeadroom } from "./tools.mjs";
@@ -45,6 +46,9 @@ const NOVNC_DIR = path.join(APP_DIR, "node_modules", "@novnc", "novnc");
 
 const store = new Store();
 const browser = new BrowserManager(store);
+// Human takeover blocks both agent browser tools and unauthorized VNC input.
+const humanLeases = new Map(); // profile slug -> owner token ID
+function isHumanControlled(slug) { return humanLeases.has(slug); }
 
 // ---- rate limiting (per-token sliding window, like Agent Computer) -------
 const windows = new Map();
@@ -233,6 +237,10 @@ async function handleMcp(req, res, token, msg) {
         try {
           validateArgs(def.inputSchema, params.arguments ?? {});
           if (!isTokenActive(token)) throw new Error("token was revoked");
+          if (def.name.startsWith("browser_") && !token.scopes.includes("admin")) {
+            const slug = token.profileSlug || params.arguments?.profile || "default";
+            if (isHumanControlled(slug)) throw new Error("Human takeover active; wait until control is handed back.");
+          }
           const result = await def.run(ctx, params.arguments ?? {});
           sendJson(res, 200, rpcResult(result, id));
         } catch (e) {
@@ -311,6 +319,19 @@ async function handleUiApi(req, res, token, parts) {
   if (!requireOwner(res, token)) return;
   const seg = parts.slice(2); // after /api/ui
   try {
+    if (seg.length === 2 && seg[0] === "viewer-control") {
+      const slug = seg[1];
+      if (!store.profileBySlug(slug)) return sendJson(res, 404, { error: "profile not found" });
+      if (req.method === "GET") return sendJson(res, 200, { profile: slug, mode: isHumanControlled(slug) ? "human" : "agent" });
+      if (req.method === "POST") {
+        const { mode } = await readJsonBody(req);
+        if (mode !== "human" && mode !== "agent") return sendJson(res, 400, { error: "mode must be human or agent" });
+        if (mode === "human") humanLeases.set(slug, token.id);
+        else humanLeases.delete(slug);
+        store.audit({ kind: "vnc.control", profile: slug, mode });
+        return sendJson(res, 200, { profile: slug, mode });
+      }
+    }
     if (req.method === "GET" && seg.length === 1 && seg[0] === "status") {
       sendJson(res, 200, {
         name: "portal",
@@ -688,6 +709,10 @@ server.on("upgrade", async (req, socket, head) => {
   store.audit({ kind: "vnc.open", profile: profile.slug });
   wss.handleUpgrade(req, socket, head, (ws) => {
     const upstream = net.connect(headed.port, "127.0.0.1");
+    // No input without explicit owner takeover, even from custom VNC clients.
+    const inputFilter = new RfbClientFilter(() =>
+      token.scopes.includes("admin") && humanLeases.get(slug) === token.id
+    );
     browser.viewerConnected(profile);
     let cleaned = false;
     const cleanup = () => {
@@ -717,8 +742,9 @@ server.on("upgrade", async (req, socket, head) => {
     ws.on("message", (data) => {
       browser.viewerActivity(profile);
       try {
-        upstream.write(data);
-      } catch {
+        for (const chunk of inputFilter.push(data)) upstream.write(chunk);
+      } catch (err) {
+        console.warn(`[vnc] rejected client input: ${err.message}`);
         cleanup();
       }
     });
