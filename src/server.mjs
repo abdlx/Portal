@@ -688,10 +688,12 @@ server.on("upgrade", async (req, socket, head) => {
   store.audit({ kind: "vnc.open", profile: profile.slug });
   wss.handleUpgrade(req, socket, head, (ws) => {
     const upstream = net.connect(headed.port, "127.0.0.1");
+    browser.viewerConnected(profile);
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      browser.viewerDisconnected(profile);
       try {
         upstream.destroy();
       } catch {
@@ -713,6 +715,7 @@ server.on("upgrade", async (req, socket, head) => {
       }
     });
     ws.on("message", (data) => {
+      browser.viewerActivity(profile);
       try {
         upstream.write(data);
       } catch {
