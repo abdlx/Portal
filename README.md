@@ -77,10 +77,10 @@ Portal can run a **single lightweight Vaultwarden server** with **one independen
 1. Install Docker Compose and the official Bitwarden CLI (`bw`), then launch the optional localhost-bound Vaultwarden instance:
 
    ```sh
-   docker compose -f vaultwarden.compose.yml up -d
+   VW_SIGNUPS_ALLOWED=true sudo docker compose -f vaultwarden.compose.yml up -d
    ```
 
-2. On the Portal laptop, open `http://localhost:8222` and create separate accounts for each bot (for example Ezra and Leo). **Immediately set `SIGNUPS_ALLOWED: "false"` in `vaultwarden.compose.yml` and redeploy** after provisioning. Never expose the plain HTTP localhost endpoint on the public internet. Use HTTPS with a trusted reverse proxy for remote vault access.
+2. On the Portal laptop, open `http://localhost:8222` and create separate accounts for each bot (for example Ezra and Leo). **Immediately close registrations** after provisioning by running `sudo docker compose -f vaultwarden.compose.yml up -d --force-recreate` (without the environment override). Never expose the plain HTTP localhost endpoint on the public internet. Use HTTPS with a trusted reverse proxy for remote vault access.
 
 3. Configure and log in to each bot's vault independently. Replace `ezra` with that Portal profile's slug, and use the same `PORTAL_HOME` as the running service (default `~/.portal`):
 
