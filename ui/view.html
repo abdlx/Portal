@@ -75,6 +75,7 @@
   <span id="dot" class="dot"></span>
   <span id="status">Connecting…</span>
   <span id="who"></span>
+  <button id="takeover" type="button" hidden>Take over</button>
   <button id="reconnect" type="button">Reconnect</button>
 </div>
 <script type="module">
@@ -87,6 +88,35 @@
   const dotEl = document.getElementById('dot');
   const whoEl = document.getElementById('who');
   const screenEl = document.getElementById('screen');
+  const takeover = document.getElementById('takeover');
+  let mode = 'agent';
+  let owner = false;
+  const controlUrl = '/api/ui/viewer-control/' + encodeURIComponent(profile);
+  async function control(method = 'GET', nextMode) {
+    const response = await fetch(controlUrl, {
+      method,
+      headers: { 'Authorization': 'Bearer ' + token, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
+      ...(method === 'POST' ? { body: JSON.stringify({ mode: nextMode }) } : {}),
+      cache: 'no-store',
+    });
+    if (response.status === 401) {
+      takeover.hidden = true;
+      owner = false;
+      return;
+    }
+    if (!response.ok) throw new Error('Control update failed: ' + response.status);
+    owner = true;
+    mode = (await response.json()).mode;
+    takeover.hidden = false;
+    takeover.textContent = mode === 'human' ? 'Hand over to agent' : 'Take over';
+    if (rfb) rfb.viewOnly = mode !== 'human';
+  }
+  takeover.addEventListener('click', async () => {
+    takeover.disabled = true;
+    try { await control('POST', mode === 'human' ? 'agent' : 'human'); }
+    catch (error) { statusEl.textContent = error.message; }
+    finally { takeover.disabled = false; }
+  });
   whoEl.textContent = 'Profile: ' + profile;
   document.title = 'Portal — live view: ' + profile;
 
@@ -105,6 +135,7 @@
     statusEl.textContent = 'Connecting…';
     dotEl.classList.remove('on');
     rfb = new RFB(screenEl, wsUrl, { wsProtocols: ['binary'] });
+    rfb.viewOnly = true;
     rfb.scaleViewport = true;
     rfb.clipViewport = false;
     rfb.background = '#000000';
@@ -113,6 +144,7 @@
     rfb.addEventListener('connect', () => {
       statusEl.textContent = 'Connected — live view of ' + profile;
       dotEl.classList.add('on');
+      void control().catch(() => {});
     });
     rfb.addEventListener('disconnect', (e) => {
       dotEl.classList.remove('on');
@@ -126,6 +158,7 @@
   }
   document.getElementById('reconnect').addEventListener('click', connect);
   connect();
+  setInterval(() => { if (token && owner) void control().catch(() => {}); }, 4000);
 </script>
 </body>
 </html>
