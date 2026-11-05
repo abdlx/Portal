@@ -202,9 +202,10 @@ EOF
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl --user daemon-reload
-  systemctl --user enable --now portal.service || {
-    echo "WARNING: could not start the service. Start it manually with:"
-    echo "  systemctl --user start portal.service"
+  systemctl --user enable portal.service
+  systemctl --user restart portal.service || {
+    echo "WARNING: could not restart the service. Start it manually with:"
+    echo "  systemctl --user restart portal.service"
   }
 else
   echo "NOTE: systemctl not found. Start the server manually with:"
