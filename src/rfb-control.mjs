@@ -40,7 +40,7 @@ export class RfbClientFilter {
         case 5: length = 6; control = true; break; // PointerEvent
         case 6: // ClientCutText, also used for extended clipboard
           if (b.length < 8) return outgoing;
-          length = 8 + (b.readUInt32BE(4) >>> 0);
+          length = 8 + Math.abs(b.readInt32BE(4));
           control = true;
           break;
         case 150: length = 10; break; // EnableContinuousUpdates
