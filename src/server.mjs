@@ -26,6 +26,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { RfbClientFilter } from "./rfb-control.mjs";
+import { VaultwardenBroker } from "./vaultwarden.mjs";
 import { Store, hashToken } from "./store.mjs";
 import { BrowserManager, browserInfo, resetBrowserCache } from "./browser.mjs";
 import { TOOLS, toolByName, hasScope, text, errText, shellSandboxStatus, getSystemHeadroom } from "./tools.mjs";
@@ -46,6 +47,7 @@ const NOVNC_DIR = path.join(APP_DIR, "node_modules", "@novnc", "novnc");
 
 const store = new Store();
 const browser = new BrowserManager(store);
+const vaultwarden = new VaultwardenBroker(store);
 // Human takeover blocks both agent browser tools and unauthorized VNC input.
 const humanLeases = new Map(); // profile slug -> owner token ID
 function isHumanControlled(slug) { return humanLeases.has(slug); }
@@ -231,6 +233,7 @@ async function handleMcp(req, res, token, msg) {
         const ctx = {
           store,
           browser,
+          vaultwarden,
           token,
           isTokenActive: () => isTokenActive(token),
         };
@@ -319,6 +322,26 @@ async function handleUiApi(req, res, token, parts) {
   if (!requireOwner(res, token)) return;
   const seg = parts.slice(2); // after /api/ui
   try {
+    if (seg.length === 2 && seg[0] === "vaultwarden") {
+      const profile = store.profileBySlug(seg[1]);
+      if (!profile) return sendJson(res, 404, { error: "profile not found" });
+      if (req.method === "GET") return sendJson(res, 200, vaultwarden.status(profile));
+      if (req.method === "POST") {
+        const { action, session } = await readJsonBody(req);
+        if (action === "unlock") vaultwarden.unlock(profile, session);
+        else if (action === "lock") vaultwarden.lock(profile);
+        else if (action === "sync") {
+          await vaultwarden.run(profile, ["sync"]);
+        } else return sendJson(res, 400, { error: "Unknown vault action" });
+        store.audit({ kind: "vaultwarden." + action, profile: profile.slug });
+        return sendJson(res, 200, vaultwarden.status(profile));
+      }
+    }
+    if (seg.length === 3 && seg[0] === "vaultwarden" && seg[2] === "items" && req.method === "GET") {
+      const profile = store.profileBySlug(seg[1]);
+      if (!profile) return sendJson(res, 404, { error: "profile not found" });
+      return sendJson(res, 200, { items: await vaultwarden.list(profile) });
+    }
     if (seg.length === 2 && seg[0] === "viewer-control") {
       const slug = seg[1];
       if (!store.profileBySlug(slug)) return sendJson(res, 404, { error: "profile not found" });
@@ -444,6 +467,7 @@ async function handleUiApi(req, res, token, parts) {
         return;
       }
       await browser.close(profile).catch(() => {});
+      vaultwarden.lock(profile);
       const result = store.deleteProfile(seg[1]);
       sendJson(res, 200, result);
       return;
