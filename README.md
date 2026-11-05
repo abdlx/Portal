@@ -70,35 +70,21 @@ Deleting a bot revokes its tokens. Its files on disk are never deleted automatic
 - No proxy rotation — the home IP is the point.
 - No token expiry (same as Agent Computer): revocation + rate limit are the controls. Rotate tokens from the panel when one leaks.
 
-## Vaultwarden per-bot credentials (optional)
+## Native per-bot credential vault
 
-Portal can run a **single lightweight Vaultwarden server** with **one independent Vaultwarden account per bot** (separate encryption/master passwords; not one shared vault). The bot never receives Vaultwarden master passwords, session keys, or raw credentials through the MCP tool response. This is not a guarantee against credential extraction from a compromised or malicious browser page.
+Portal includes a built-in encrypted credential vault. **There is no Vaultwarden server, Docker container, Bitwarden CLI, or external account to install.**
 
-1. Install Docker Compose and the official Bitwarden CLI (`bw`), then launch the optional localhost-bound Vaultwarden instance:
+1. Open Portal's owner dashboard at `/ui/`; select **Credentials** in the navigation.
+2. Choose a bot, enter a label, **HTTPS website URL**, username/email, and password, then click **Add credential**. Each bot has its own credential list and cannot request other bots' credential IDs.
+3. The owner panel displays the name, exact allowed origin, username, and ID, but **never the stored password**.
+4. The agent calls `browser_credential_fill` with `item_id` (the UUID from the panel). Portal confirms the browser is on the exact HTTPS origin, retrieves the secret inside its trusted server, and fills the page's login fields. No secret is returned by the MCP call.
+5. Delete credentials from the same panel when they're no longer needed.
 
-   ```sh
-   VW_SIGNUPS_ALLOWED=true sudo docker compose -f vaultwarden.compose.yml up -d
-   ```
+**Encryption:** Each profile gets a key derived using HKDF-SHA256 from a 32-byte Portal master key. Entries are encrypted with AES-256-GCM and authenticated with the stable profile ID. Files live under `~/.portal/credential-vault/` (one `prof_*.enc` file per bot); the **master key** is `~/.portal/credential-master.key` (0600). Back up the key **and** encrypted files together; losing the key permanently loses access to all saved passwords. Never place the key in HOB prompts, repositories, backups readable by agents, or agent workspaces.
 
-2. On the Portal laptop, open `http://localhost:8222` and create separate accounts for each bot (for example Ezra and Leo). **Immediately close registrations** after provisioning by running `sudo docker compose -f vaultwarden.compose.yml up -d --force-recreate` (without the environment override). Never expose the plain HTTP localhost endpoint on the public internet. Use HTTPS with a trusted reverse proxy for remote vault access.
+**Network safety:** Adding a credential is restricted to local connections or TLS-secured connections. If Portal sits behind a reverse proxy, use a trusted HTTPS endpoint; the app normally sees its connection from the local proxy. Do not expose the owner API directly to the public internet. In particular, a bare `http://192.168.0.4:9879` browser connection is not suitable for submitting passwords.
 
-3. Configure and log in to each bot's vault independently. Replace `ezra` with that Portal profile's slug, and use the same `PORTAL_HOME` as the running service (default `~/.portal`):
-
-   ```sh
-   npm install -g @bitwarden/cli
-   mkdir -p ~/.portal/vaultwarden/ezra
-   chmod 700 ~/.portal/vaultwarden/ezra
-   export BITWARDENCLI_APPDATA_DIR="$HOME/.portal/vaultwarden/ezra"
-   bw config server http://localhost:8222
-   bw login
-   bw unlock --raw
-   ```
-
-4. Paste the resulting `BW_SESSION` **into Portal's owner-only Vaultwarden panel**, select that bot, and click Unlock. The session stays in Portal process memory only, and disappears on restart. Do not paste this key into HOB, agent prompts, or a terminal recording.
-5. Add login items in Vaultwarden with an exact **HTTPS origin** under the item's URI list; use **Sync** in the owner panel after changing items. The owner panel shows item IDs, labels, and associated origins, never saved passwords. An agent calls `browser_credential_fill` with `item_id` (exact UUID) to fill a login belonging to its own Vaultwarden account. Item data is never returned to the agent tool.
-6. Click Lock or restart Portal to clear the per-bot session key.
-
-**Security limits:** The autofill broker refuses HTTP and mismatched origins, including subdomains. It only fills password fields in the main page (no arbitrary iframe injection). However, once a secret is in a web page's password input, a page script or a sufficiently powerful browser agent can potentially read or exfiltrate it. Portal still exposes browser and shell tools. **This integration is not suitable for high-value production credentials until browser/secret isolation is independently security-reviewed.** Prefer OAuth and short-lived scoped credentials where possible. Credential access audit records include tool name and bot but never secret values.
+**Important limitation:** Passwords are **not exposed in Portal MCP responses**, but filling a password into a browser is **not absolute secrecy**. Page JavaScript or an agent with sufficiently powerful browser/shell access can extract or exfiltrate the filled value. Do not use this alone for high-value production accounts; prefer OAuth or scoped tokens and independently review the isolation model before adding real credentials.
 
 ## Live VNC takeover
 
