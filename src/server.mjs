@@ -26,7 +26,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { RfbClientFilter } from "./rfb-control.mjs";
-import { VaultwardenBroker } from "./vaultwarden.mjs";
+import { CredentialVault } from "./credential-vault.mjs";
 import { Store, hashToken } from "./store.mjs";
 import { BrowserManager, browserInfo, resetBrowserCache } from "./browser.mjs";
 import { TOOLS, toolByName, hasScope, text, errText, shellSandboxStatus, getSystemHeadroom } from "./tools.mjs";
@@ -47,7 +47,7 @@ const NOVNC_DIR = path.join(APP_DIR, "node_modules", "@novnc", "novnc");
 
 const store = new Store();
 const browser = new BrowserManager(store);
-const vaultwarden = new VaultwardenBroker(store);
+const credentialVault = new CredentialVault(store);
 // Human takeover blocks both agent browser tools and unauthorized VNC input.
 const humanLeases = new Map(); // profile slug -> owner token ID
 function isHumanControlled(slug) { return humanLeases.has(slug); }
@@ -233,7 +233,7 @@ async function handleMcp(req, res, token, msg) {
         const ctx = {
           store,
           browser,
-          vaultwarden,
+          credentialVault,
           token,
           isTokenActive: () => isTokenActive(token),
         };
@@ -322,25 +322,27 @@ async function handleUiApi(req, res, token, parts) {
   if (!requireOwner(res, token)) return;
   const seg = parts.slice(2); // after /api/ui
   try {
-    if (seg.length === 2 && seg[0] === "vaultwarden") {
+    if (seg.length >= 2 && seg[0] === "vault" && seg.length <= 3) {
       const profile = store.profileBySlug(seg[1]);
       if (!profile) return sendJson(res, 404, { error: "profile not found" });
-      if (req.method === "GET") return sendJson(res, 200, vaultwarden.status(profile));
-      if (req.method === "POST") {
-        const { action, session } = await readJsonBody(req);
-        if (action === "unlock") vaultwarden.unlock(profile, session);
-        else if (action === "lock") vaultwarden.lock(profile);
-        else if (action === "sync") {
-          await vaultwarden.run(profile, ["sync"]);
-        } else return sendJson(res, 400, { error: "Unknown vault action" });
-        store.audit({ kind: "vaultwarden." + action, profile: profile.slug });
-        return sendJson(res, 200, vaultwarden.status(profile));
+      if (seg.length === 2 && req.method === "GET")
+        return sendJson(res, 200, { profile: profile.slug, items: credentialVault.list(profile) });
+      if (seg.length === 2 && req.method === "POST") {
+        // Never accept plaintext passwords over an insecure remote connection.
+        const host = (req.socket.localAddress || "").replace(/^::ffff:/, "");
+        const local = req.socket.remoteAddress === req.socket.localAddress ||
+          ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
+        const secure = !!req.socket.encrypted;
+        if (!local && !secure) return sendJson(res, 403, { error: "Saving passwords requires localhost or HTTPS; never submit secrets over plain LAN HTTP" });
+        const item = credentialVault.add(profile, await readJsonBody(req));
+        store.audit({ kind: "credential.add", profile: profile.slug, itemId: item.id, origin: item.origin });
+        return sendJson(res, 201, { item });
       }
-    }
-    if (seg.length === 3 && seg[0] === "vaultwarden" && seg[2] === "items" && req.method === "GET") {
-      const profile = store.profileBySlug(seg[1]);
-      if (!profile) return sendJson(res, 404, { error: "profile not found" });
-      return sendJson(res, 200, { items: await vaultwarden.list(profile) });
+      if (seg.length === 3 && req.method === "DELETE") {
+        const result = credentialVault.remove(profile, seg[2]);
+        store.audit({ kind: "credential.delete", profile: profile.slug, itemId: seg[2] });
+        return sendJson(res, 200, result);
+      }
     }
     if (seg.length === 2 && seg[0] === "viewer-control") {
       const slug = seg[1];
@@ -467,7 +469,6 @@ async function handleUiApi(req, res, token, parts) {
         return;
       }
       await browser.close(profile).catch(() => {});
-      vaultwarden.lock(profile);
       const result = store.deleteProfile(seg[1]);
       sendJson(res, 200, result);
       return;
