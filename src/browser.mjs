@@ -1087,6 +1087,36 @@ export class BrowserManager {
     });
   }
 
+  // Secret stays in the broker; only the outcome enters the tool transcript.
+  // Never expose the value in snapshots, logs, or tool results.
+  async fillVaultLogin(profile, vault, itemId, tab) {
+    const e = await this.ensure(profile);
+    return this.#chain(profile.slug, async () => {
+      const page = await this.#activePage(e, tab);
+      const tabId = e.tabs.get(page);
+      this.#touchTab(e, tabId, true);
+      try {
+        const pageUrl = page.url();
+        // Check field presence before decrypting or retrieving the secret.
+        const pass = page.locator('input[type="password"]').first();
+        if (await pass.count() !== 1 || !(await pass.isVisible()))
+          throw new Error("No visible password input in the main document");
+        const login = await vault.getLogin(profile, itemId, pageUrl);
+        // Re-check origin after async vault lookup to prevent navigation races.
+        if (new URL(page.url()).origin !== new URL(pageUrl).origin)
+          throw new Error("Login page changed during credential lookup");
+        if (login.username) {
+          const name = page.locator('input[autocomplete="username"], input[type="email"], input[name="username"]').first();
+          if (await name.count() && await name.isVisible()) await name.fill(login.username);
+        }
+        await pass.fill(login.password);
+        return { success: true, profile: profile.slug, tab: tabId, origin: new URL(pageUrl).origin };
+      } finally {
+        this.#touchTab(e, tabId, false);
+      }
+    });
+  }
+
   async content(profile, tab) {
     const e = await this.ensure(profile);
     return this.#chain(profile.slug, async () => {
