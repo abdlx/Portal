@@ -442,7 +442,7 @@
     <nav id="sideNav" class="side-nav hidden" aria-label="Sections">
       <a class="nav-link active" href="#sec-status"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Status</a>
       <a class="nav-link" href="#sec-bots"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="8" width="14" height="10" rx="3"/><path d="M12 8V4"/><circle cx="9.5" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13" r="1" fill="currentColor" stroke="none"/></svg>Bots<span id="navBotCount" class="count hidden"></span></a>
-      <a class="nav-link" href="#sec-vault">Vaultwarden</a>
+      <a class="nav-link" href="#sec-vault">Credentials</a>
       <a class="nav-link" href="#sec-connect"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>Connect</a>
       <a class="nav-link" href="#sec-activity"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>Activity</a>
     </nav>
@@ -508,19 +508,29 @@
       <div id="bots">Loading…</div>
     </section>
 
-    <section class="card" id="sec-vault" aria-label="Vaultwarden credential accounts">
-      <p class="eyebrow">Secrets</p>
-      <h2>Vaultwarden</h2>
-      <p class="lede">Each bot connects to a separate Bitwarden-compatible account through the server-side CLI. Master passwords and raw secrets never appear in agent tool responses. Set up the account with <code>bw</code> on the Portal host first (see README). Session keys are held in memory and cleared on restart.</p>
+    <section class="card" id="sec-vault" aria-label="Per-bot encrypted credentials">
+      <p class="eyebrow">Security</p>
+      <h2>Credential vault</h2>
+      <p class="lede">Native encrypted credentials for each bot. No Vaultwarden, Docker, or separate login required. Add a login here; agents only request autofill by credential ID. Keep the Portal owner's machine and master key secure.</p>
       <div class="row" style="margin-top:14px">
+        <label for="vaultProfile">Bot</label>
         <select id="vaultProfile" aria-label="Bot profile"></select>
-        <input id="vaultSession" type="password" placeholder="Paste BW_SESSION for selected bot" autocomplete="off" style="flex:1;min-width:210px">
-        <button class="btn primary" id="vaultUnlock">Unlock</button>
-        <button class="btn secondary" id="vaultLock">Lock</button>
-        <button class="btn secondary" id="vaultSync">Sync</button>
+        <button id="vaultRefresh" class="btn secondary small">Refresh</button>
       </div>
+      <form id="vaultForm" autocomplete="off" style="margin-top:14px">
+        <div class="row">
+          <input id="vaultName" required maxlength="120" placeholder="Account label (e.g. Alync Instagram)" style="flex:1;min-width:190px">
+          <input id="vaultOrigin" required type="url" placeholder="https://www.instagram.com" style="flex:1;min-width:190px">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input id="vaultUsername" maxlength="320" placeholder="Username / email" autocomplete="off" style="flex:1;min-width:190px">
+          <input id="vaultPassword" required type="password" placeholder="Password" autocomplete="new-password" style="flex:1;min-width:190px">
+          <button class="btn primary" type="submit">Add credential</button>
+        </div>
+      </form>
       <p class="muted" id="vaultStatus" style="margin:10px 0"></p>
       <div id="vaultItems" class="muted"></div>
+      <p class="lede" style="margin-top:14px">Only save passwords over HTTPS or localhost. Passwords are encrypted on disk; browser autofill is not protection against a malicious webpage or a bot with arbitrary browser execution access.</p>
     </section>
 
     <section class="card" id="sec-connect" aria-label="Connect a bot in hob">
@@ -678,32 +688,46 @@ document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', 
   document.querySelectorAll('.nav-link').forEach(x => x.classList.remove('active'));
   a.classList.add('active');
 }));
-async function vaultAction(action) {
+async function refreshVault() {
   const slug = $('vaultProfile').value;
-  if (!slug) return;
+  if (!slug) { $('vaultItems').textContent = 'Create a bot first.'; return; }
   try {
-    const data = await api('/api/ui/vaultwarden/' + encodeURIComponent(slug), {
-      method: 'POST',
-      body: JSON.stringify({ action, ...(action === 'unlock' ? { session: $('vaultSession').value.trim() } : {}) })
-    });
-    $('vaultSession').value = '';
-    $('vaultStatus').textContent = data.unlocked ? 'Unlocked in Portal memory' : 'Locked';
-    if (data.unlocked) {
-      const { items } = await api('/api/ui/vaultwarden/' + encodeURIComponent(slug) + '/items');
-      $('vaultItems').innerHTML = items.map(item => '<div class="tok-row"><b>' + esc(item.name) + '</b> <code>' + esc(item.id) + '</code> ' + esc(item.origins.join(', ')) + '</div>').join('') || 'No login items saved.';
-    } else $('vaultItems').textContent = '';
+    const { items } = await api('/api/ui/vault/' + encodeURIComponent(slug));
+    const container = $('vaultItems');
+    container.innerHTML = items.length ? items.map(item =>
+      '<div class="tok-row"><b>' + esc(item.name) + '</b> <code>' + esc(item.id) +
+      '</code> ' + esc(item.origin) + ' · ' + esc(item.username) +
+      ' <button class="btn danger small" data-vault-delete="' + esc(item.id) + '">Delete</button></div>'
+    ).join('') : '<p class="muted">No credentials saved for this bot.</p>';
+    container.querySelectorAll('[data-vault-delete]').forEach(button => button.addEventListener('click', async () => {
+      if (!confirm('Permanently delete this credential?')) return;
+      try {
+        await api('/api/ui/vault/' + encodeURIComponent(slug) + '/' + encodeURIComponent(button.dataset.vaultDelete), { method: 'DELETE' });
+        $('vaultStatus').textContent = 'Credential deleted.';
+        await refreshVault();
+      } catch (err) { $('vaultStatus').textContent = err.message; }
+    }));
   } catch (err) { $('vaultStatus').textContent = err.message; }
 }
-$('vaultUnlock').addEventListener('click', () => vaultAction('unlock'));
-$('vaultLock').addEventListener('click', () => vaultAction('lock'));
-$('vaultSync').addEventListener('click', () => vaultAction('sync'));
-$('vaultProfile').addEventListener('change', async () => {
-  $('vaultItems').textContent = '';
+$('vaultForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
   const slug = $('vaultProfile').value;
-  if (!slug) return;
-  try { const state = await api('/api/ui/vaultwarden/' + encodeURIComponent(slug)); $('vaultStatus').textContent = state.unlocked ? 'Unlocked' : 'Locked'; }
-  catch (e) { $('vaultStatus').textContent = e.message; }
+  if (!slug) { $('vaultStatus').textContent = 'Choose a bot first.'; return; }
+  try {
+    const item = {
+      name: $('vaultName').value.trim(), origin: $('vaultOrigin').value.trim(),
+      username: $('vaultUsername').value.trim(), password: $('vaultPassword').value,
+    };
+    await api('/api/ui/vault/' + encodeURIComponent(slug), { method: 'POST', body: JSON.stringify(item) });
+    $('vaultPassword').value = '';
+    $('vaultName').value = '';
+    $('vaultUsername').value = '';
+    $('vaultStatus').textContent = 'Encrypted credential saved for ' + slug + '.';
+    await refreshVault();
+  } catch (err) { $('vaultStatus').textContent = err.message; }
 });
+$('vaultRefresh').addEventListener('click', refreshVault);
+$('vaultProfile').addEventListener('change', refreshVault);
 $('signInBtn').addEventListener('click', async () => {
   ownerToken = $('ownerToken').value.trim();
   if (!ownerToken) return;
