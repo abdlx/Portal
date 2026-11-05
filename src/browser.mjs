@@ -411,7 +411,11 @@ export class BrowserManager {
       if (Date.now() - (entry.lastActivityAt || Date.now()) < maxIdleMs) continue;
       this.#syncPages(entry);
       // Never interrupt in-flight page requests, downloads, or automation.
-      if ([...entry.tabs.values()].some((id) => this.isTabProcessing(entry, id))) continue;
+      if ([...entry.tabs.values()].some((id) => {
+        const meta = entry.tabMeta?.get(id);
+        // A passive persistent WebSocket alone does not count as user activity.
+        return meta && (meta.isAutomating || meta.activeRequests > 0 || meta.activeDownloads > 0);
+      })) continue;
       const profile = this.store.profileBySlug(slug);
       if (!profile) continue;
       await this.close(profile, { reason: "idle" });
@@ -498,7 +502,8 @@ export class BrowserManager {
     return (
       meta.isAutomating ||
       meta.activeRequests > 0 ||
-      meta.activeDownloads > 0
+      meta.activeDownloads > 0 ||
+      meta.activeWebSockets > 0
     );
   }
 
