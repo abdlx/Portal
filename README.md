@@ -65,10 +65,46 @@ Deleting a bot revokes its tokens. Its files on disk are never deleted automatic
 
 ## What it does NOT do
 
-- No wake-on-call or exclusive human-takeover leases/arbitration. The VNC viewer provides interactive human input but does not automatically suspend agent tool actions.
+- No wake-on-call or exclusive human-takeover leases/arbitration. The viewer is view-only by default. Owner takeover blocks new agent browser tools and forwards owner input until handover. Already-running actions are not preempted.
 - No CAPTCHA solving. Camoufox aims to prevent challenges, not solve them.
 - No proxy rotation — the home IP is the point.
 - No token expiry (same as Agent Computer): revocation + rate limit are the controls. Rotate tokens from the panel when one leaks.
+
+## Vaultwarden per-bot credentials (optional)
+
+Portal can run a **single lightweight Vaultwarden server** with **one independent Vaultwarden account per bot** (separate encryption/master passwords; not one shared vault). The bot never receives Vaultwarden master passwords, session keys, or raw credentials through the MCP tool response. This is not a guarantee against credential extraction from a compromised or malicious browser page.
+
+1. Install Docker Compose and the official Bitwarden CLI (`bw`), then launch the optional localhost-bound Vaultwarden instance:
+
+   ```sh
+   docker compose -f vaultwarden.compose.yml up -d
+   ```
+
+2. On the Portal laptop, open `http://localhost:8222` and create separate accounts for each bot (for example Ezra and Leo). **Immediately set `SIGNUPS_ALLOWED: "false"` in `vaultwarden.compose.yml` and redeploy** after provisioning. Never expose the plain HTTP localhost endpoint on the public internet. Use HTTPS with a trusted reverse proxy for remote vault access.
+
+3. Configure and log in to each bot's vault independently. Replace `ezra` with that Portal profile's slug, and use the same `PORTAL_HOME` as the running service (default `~/.portal`):
+
+   ```sh
+   npm install -g @bitwarden/cli
+   mkdir -p ~/.portal/vaultwarden/ezra
+   chmod 700 ~/.portal/vaultwarden/ezra
+   export BITWARDENCLI_APPDATA_DIR="$HOME/.portal/vaultwarden/ezra"
+   bw config server http://localhost:8222
+   bw login
+   bw unlock --raw
+   ```
+
+4. Paste the resulting `BW_SESSION` **into Portal's owner-only Vaultwarden panel**, select that bot, and click Unlock. The session stays in Portal process memory only, and disappears on restart. Do not paste this key into HOB, agent prompts, or a terminal recording.
+5. Add login items in Vaultwarden with an exact **HTTPS origin** under the item's URI list; use **Sync** in the owner panel after changing items. The owner panel shows item IDs, labels, and associated origins, never saved passwords. An agent calls `browser_credential_fill` with `item_id` (exact UUID) to fill a login belonging to its own Vaultwarden account. Item data is never returned to the agent tool.
+6. Click Lock or restart Portal to clear the per-bot session key.
+
+**Security limits:** The autofill broker refuses HTTP and mismatched origins, including subdomains. It only fills password fields in the main page (no arbitrary iframe injection). However, once a secret is in a web page's password input, a page script or a sufficiently powerful browser agent can potentially read or exfiltrate it. Portal still exposes browser and shell tools. **This integration is not suitable for high-value production credentials until browser/secret isolation is independently security-reviewed.** Prefer OAuth and short-lived scoped credentials where possible. Credential access audit records include tool name and bot but never secret values.
+
+## Live VNC takeover
+
+The live viewer defaults to **agent-only control**: mouse and keyboard events from the viewer are ignored. An **owner-authenticated** view shows the **Take over** button, which grants the owner exclusive interactive input and blocks new bot browser-tool calls for that profile. **Hand over to agent** releases the lease. A viewer opened with a bot token stays view-only and cannot take control. Portal filters keyboard, mouse and clipboard RFB messages server-side; hiding the button alone is not the security boundary.
+
+The takeover is enforced for new MCP browser calls, not already-running operations or arbitrary external automation processes. Refreshing the browser session or restarting Portal resets the in-memory lease. To use takeover inside HOB's embedded viewer, HOB must provide an owner-authenticated control path; bot tokens alone cannot invoke takeover.
 
 ## Security notes
 
