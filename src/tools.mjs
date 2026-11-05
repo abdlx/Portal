@@ -603,6 +603,17 @@ export const TOOLS = [
     },
   },
   {
+    name: "browser_credential_fill",
+    scope: "browser",
+    description: "Fill a saved Vaultwarden login by exact item UUID in the current bot's browser. The password is never returned. Requires the owner to unlock that bot's account first.",
+    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG, item_id: { type: "string" } }, ["item_id"]),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      return text(await ctx.browser.fillVaultLogin(profile, ctx.vaultwarden, args.item_id, args.tab));
+    },
+  },
+  {
     name: "browser_close",
     scope: "browser",
     description: "Close the browser (profile state flushes to disk).",
