@@ -83,6 +83,8 @@
 
   const params = new URLSearchParams(location.search);
   const token = params.get('token') || '';
+  let ownerToken = '';
+  let viewerToken = token;
   const profile = params.get('profile') || 'default';
   const statusEl = document.getElementById('status');
   const dotEl = document.getElementById('dot');
@@ -95,13 +97,14 @@
   async function control(method = 'GET', nextMode) {
     const response = await fetch(controlUrl, {
       method,
-      headers: { 'Authorization': 'Bearer ' + token, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { 'Authorization': 'Bearer ' + (ownerToken || token), ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
       ...(method === 'POST' ? { body: JSON.stringify({ mode: nextMode }) } : {}),
       cache: 'no-store',
     });
     if (response.status === 401) {
-      takeover.hidden = true;
       owner = false;
+      takeover.hidden = false;
+      takeover.textContent = 'Take over';
       return;
     }
     if (!response.ok) throw new Error('Control update failed: ' + response.status);
@@ -113,8 +116,22 @@
   }
   takeover.addEventListener('click', async () => {
     takeover.disabled = true;
-    try { await control('POST', mode === 'human' ? 'agent' : 'human'); }
-    catch (error) { statusEl.textContent = error.message; }
+    try {
+      if (!owner) {
+        const candidate = window.prompt('Enter the Portal owner token to take control:');
+        if (!candidate) return;
+        ownerToken = candidate.trim();
+        await control();
+        if (!owner) { ownerToken = ''; throw new Error('Owner authentication rejected'); }
+      }
+      await control('POST', mode === 'human' ? 'agent' : 'human');
+      // The VNC connection must itself use owner credentials for input to pass
+      // the server-side RFB filter; merely toggling viewOnly is insufficient.
+      if (viewerToken !== (ownerToken || token)) {
+        viewerToken = ownerToken || token;
+        connect();
+      }
+    } catch (error) { statusEl.textContent = error.message; }
     finally { takeover.disabled = false; }
   });
   whoEl.textContent = 'Profile: ' + profile;
@@ -130,7 +147,7 @@
     }
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = scheme + '//' + location.host + '/api/computers/portal/vnc'
-      + '?token=' + encodeURIComponent(token)
+      + '?token=' + encodeURIComponent(viewerToken)
       + '&profile=' + encodeURIComponent(profile);
     statusEl.textContent = 'Connecting…';
     dotEl.classList.remove('on');
