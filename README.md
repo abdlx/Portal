@@ -102,9 +102,9 @@ Portal can run a **single lightweight Vaultwarden server** with **one independen
 
 ## Live VNC takeover
 
-The live viewer defaults to **agent-only control**: mouse and keyboard events from the viewer are ignored. An **owner-authenticated** view shows the **Take over** button, which grants the owner exclusive interactive input and blocks new bot browser-tool calls for that profile. **Hand over to agent** releases the lease. A viewer opened with a bot token stays view-only and cannot take control. Portal filters keyboard, mouse and clipboard RFB messages server-side; hiding the button alone is not the security boundary.
+The live viewer defaults to **agent-only control**: mouse and keyboard events from the viewer are ignored. An **owner-authenticated** view shows the **Take over** button, which grants the owner exclusive interactive input and blocks new bot browser-tool calls for that profile. **Hand over to agent** releases the lease. A viewer opened with a bot token stays view-only until the human enters the Portal owner token into the Take over prompt. The bot token alone never grants control. Portal filters keyboard, mouse and clipboard RFB messages server-side; hiding the button alone is not the security boundary.
 
-The takeover is enforced for new MCP browser calls, not already-running operations or arbitrary external automation processes. Refreshing the browser session or restarting Portal resets the in-memory lease. To use takeover inside HOB's embedded viewer, HOB must provide an owner-authenticated control path; bot tokens alone cannot invoke takeover.
+The takeover is enforced for new MCP browser calls, not already-running operations or arbitrary external automation processes. Refreshing the browser session or restarting Portal resets the in-memory lease. When using the viewer embedded in HOB, the human must authenticate with Portal's owner token to take over; the bot token alone cannot invoke takeover.
 
 ## Security notes
 
