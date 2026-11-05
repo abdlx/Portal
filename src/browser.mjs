@@ -1141,4 +1141,32 @@ export class BrowserManager {
       }
     });
   }
+
+  async screenshot(profile, tab, opts = {}) {
+    if (typeof tab === "object" && tab !== null && opts && Object.keys(opts).length === 0) {
+      opts = tab;
+      tab = undefined;
+    }
+    const e = await this.ensure(profile);
+    return this.#chain(profile.slug, async () => {
+      const pg = await this.#activePage(e, tab);
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
+      try {
+        let title = "";
+        try {
+          title = await pg.title();
+        } catch {
+          /* ignore */
+        }
+        const shotOpts = {};
+        if (opts.fullPage) shotOpts.fullPage = true;
+        if (opts.timeout) shotOpts.timeout = opts.timeout;
+        const buffer = await pg.screenshot(shotOpts);
+        return { url: pg.url(), title, tab: tabId, buffer };
+      } finally {
+        this.#touchTab(e, tabId, false);
+      }
+    });
+  }
 }

@@ -614,6 +614,93 @@ export const TOOLS = [
     },
   },
   {
+    name: "browser_screenshot",
+    scope: "browser",
+    description:
+      "Take a screenshot of the rendered browser page (viewport or full scrollable page). Returns base64 image data for visual inspection and/or saves the PNG file to the profile workspace for delivery.",
+    inputSchema: obj({
+      ...COMPUTER_ARG,
+      ...TAB_ARG,
+      fullPage: {
+        type: "boolean",
+        description:
+          "Whether to capture the full scrollable page instead of just the currently visible viewport. Defaults to false.",
+      },
+      path: {
+        type: "string",
+        description:
+          "Relative file path within the profile workspace to save the screenshot PNG (e.g. 'screenshot.png' or 'artifacts/page.png'). Auto-creates parent directories. If omitted and save is not false, defaults to 'screenshot.png'.",
+      },
+      save: {
+        type: "boolean",
+        description:
+          "Whether to save the screenshot to the profile workspace. Defaults to true.",
+      },
+      base64: {
+        type: "boolean",
+        description:
+          "Whether to include the base64-encoded PNG image in the MCP response content for visual inspection. Defaults to true.",
+      },
+      timeout_s: {
+        type: "number",
+        description:
+          "Timeout in seconds for taking the screenshot. Defaults to 30.",
+      },
+    }),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      const timeout = args.timeout_s ? Math.round(args.timeout_s * 1000) : 30000;
+      const shot = await ctx.browser.screenshot(profile, args.tab, {
+        fullPage: args.fullPage,
+        timeout,
+      });
+
+      let savedRelPath = null;
+      let savedAbsPath = null;
+      const shouldSave = args.save !== false;
+      if (shouldSave) {
+        savedRelPath =
+          args.path && typeof args.path === "string" && args.path.trim()
+            ? args.path.trim()
+            : "screenshot.png";
+        savedAbsPath = resolveInWorkspace(ctx.store, profile, savedRelPath);
+        fs.mkdirSync(path.dirname(savedAbsPath), { recursive: true });
+        await fs.promises.writeFile(savedAbsPath, shot.buffer);
+      }
+
+      const info = {
+        ok: true,
+        url: shot.url,
+        title: shot.title,
+        tab: shot.tab,
+        fullPage: !!args.fullPage,
+        bytes: shot.buffer.length,
+      };
+      if (savedRelPath) {
+        info.path = savedRelPath;
+        info.workspacePath = savedAbsPath;
+      }
+
+      const content = [
+        {
+          type: "text",
+          text: JSON.stringify(info, null, 2),
+        },
+      ];
+
+      if (args.base64 !== false) {
+        content.push({
+          type: "image",
+          data: shot.buffer.toString("base64"),
+          mimeType: "image/png",
+        });
+      }
+
+      return { content };
+    },
+  },
+  {
     name: "browser_close",
     scope: "browser",
     description: "Close the browser (profile state flushes to disk).",

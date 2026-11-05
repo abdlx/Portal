@@ -171,6 +171,14 @@ try {
     bsText.slice(0, 120),
   );
 
+  const bshot = await call(dexToken, "browser_screenshot");
+  const bshotText = bshot.json.result.content[0].text;
+  check(
+    "browser_screenshot: installed works, missing errors clearly",
+    browserAvailable ? /ok/.test(bshotText) : /not installed/i.test(bshotText),
+    bshotText.slice(0, 120),
+  );
+
   // 12. Multiple tabs (only when the browser is installed)
   if (browserAvailable) {
     const t2 = await call(dexToken, "browser_tab_new", { url: "data:text/html,<h1>Tab Two</h1>" });
