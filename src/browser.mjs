@@ -476,11 +476,15 @@ export class BrowserManager {
           if (m && m.activeWebSockets > 0) m.activeWebSockets--;
         });
       });
-      page.on("download", () => {
+      page.on("download", (download) => {
         const meta = entry.tabMeta?.get(tabId);
         if (meta) {
           meta.activeDownloads++;
           meta.lastActivityTimestamp = Date.now();
+          // Finish tracking completed, failed, and cancelled downloads.
+          Promise.resolve().then(() => download.path()).catch(() => {}).finally(() => {
+            meta.activeDownloads = Math.max(0, meta.activeDownloads - 1);
+          });
         }
       });
     } catch {
@@ -494,8 +498,7 @@ export class BrowserManager {
     return (
       meta.isAutomating ||
       meta.activeRequests > 0 ||
-      meta.activeDownloads > 0 ||
-      meta.activeWebSockets > 0
+      meta.activeDownloads > 0
     );
   }
 
@@ -893,7 +896,11 @@ export class BrowserManager {
           // Refuse to sleep rather than silently lose the user's open tabs.
           throw new Error(`Cannot save browser tabs for ${slug}: ${err.message}`);
         }
-        await e.context.close();
+        try {
+          await e.context.close();
+        } catch (err) {
+          console.warn(`[portal] context close for ${slug}: ${err.message}`);
+        }
       }
       if (this.contexts.get(slug) === e) this.contexts.delete(slug);
       // Xvnc must also exit: asleep profiles consume no browser/display CPU or RAM.
