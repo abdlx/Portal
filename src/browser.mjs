@@ -216,7 +216,9 @@ export const SNAPSHOT_JS = `() => {
     seen.add(sel);
 
     // textContent reads internal node text without forcing reflow like innerText
-    const text = (el.textContent || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+    // Never include a password input's value in the agent snapshot.
+    // Its value otherwise becomes the element name when labels are absent.
+    const text = (el.type === 'password' ? '' : (el.textContent || el.value || '')).replace(/\\s+/g, ' ').trim().slice(0, 80);
     const name = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || text || el.tagName).slice(0, 80);
     const role = el.getAttribute('role') || ({A:'link',BUTTON:'button',INPUT:'textbox',SELECT:'combobox',TEXTAREA:'textbox',SUMMARY:'button'}[el.tagName] || el.tagName.toLowerCase());
 
