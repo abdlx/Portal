@@ -5,11 +5,11 @@ services:
     restart: unless-stopped
     environment:
       DOMAIN: "http://localhost:8222"
-      SIGNUPS_ALLOWED: "true" # Disable after creating the separate bot accounts.
+      SIGNUPS_ALLOWED: "${VW_SIGNUPS_ALLOWED:-false}" # Temporarily set true only during local account provisioning.
       WEBSOCKET_ENABLED: "true"
     ports:
       - "127.0.0.1:8222:80"
     volumes:
-      - "${HOME}/.portal/vaultwarden-server:/data"
+      - "./.vaultwarden-data:/data"
     security_opt:
       - no-new-privileges:true
