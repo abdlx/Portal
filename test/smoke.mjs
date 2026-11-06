@@ -98,6 +98,7 @@ try {
   const list = await rpc(dexToken, { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
   const names = (list.json?.result?.tools || []).map((t) => t.name);
   check("tools/list has computer_list + batch", names.includes("computer_list") && names.includes("batch"));
+  check("tools/list has browser_credential_list + browser_credential_fill", names.includes("browser_credential_list") && names.includes("browser_credential_fill"));
   check("tools/list hides admin tools from bot token", !names.includes("computer_create"));
 
   // 4. Bare tools/call with NO prior initialize (the panel path)
@@ -112,6 +113,10 @@ try {
   const pcJson = JSON.parse(pc.json.result.content[0].text);
   check("profile_current binds dex", pcJson.profileSlug === "dex");
   check("profile_current reports workspace", pcJson.workspace === path.join(HOME, "profiles", "dex", "workspace"), pcJson.workspace);
+
+  const clist = await call(dexToken, "browser_credential_list");
+  const clistJson = JSON.parse(clist.json.result.content[0].text);
+  check("browser_credential_list returns array for bound profile", Array.isArray(clistJson) && clistJson.length === 0);
 
   // 5. Cross-profile rejection BEFORE any work
   const cross = await call(dexToken, "fs_list", { profile: "kai", path: "." });

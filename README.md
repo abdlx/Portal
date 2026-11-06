@@ -76,8 +76,8 @@ Portal includes a built-in encrypted credential vault. **There is no Vaultwarden
 
 1. Open Portal's owner dashboard at `/ui/`; select **Credentials** in the navigation.
 2. Choose a bot, enter a label, **HTTPS website URL**, username/email, and password, then click **Add credential**. Each bot has its own credential list and cannot request other bots' credential IDs.
-3. The owner panel displays the name, exact allowed origin, username, and ID, but **never the stored password**.
-4. The agent calls `browser_credential_fill` with `item_id` (the UUID from the panel). Portal confirms the browser is on the exact HTTPS origin, retrieves the secret inside its trusted server, and fills the page's login fields. No secret is returned by the MCP call.
+3. The owner panel displays the name, exact allowed origin, username, and ID, but **never the stored password**. The agent can also discover saved credentials for its profile using the `browser_credential_list` MCP tool.
+4. The agent calls `browser_credential_fill`. If `item_id` is omitted, Portal auto-matches credentials by the current page origin (or accepts a specific `item_id`). Portal confirms the browser is on the exact HTTPS origin, retrieves the secret inside its trusted server, and fills the page's visible login fields. No secret is returned by the MCP call.
 5. Delete credentials from the same panel when they're no longer needed.
 
 **Encryption:** Each profile gets a key derived using HKDF-SHA256 from a 32-byte Portal master key. Entries are encrypted with AES-256-GCM and authenticated with the stable profile ID. Files live under `~/.portal/credential-vault/` (one `prof_*.enc` file per bot); the **master key** is `~/.portal/credential-master.key` (0600). Back up the key **and** encrypted files together; losing the key permanently loses access to all saved passwords. Never place the key in HOB prompts, repositories, backups readable by agents, or agent workspaces.

@@ -1107,19 +1107,48 @@ export class BrowserManager {
       try {
         const pageUrl = page.url();
         // Check field presence before decrypting or retrieving the secret.
-        const pass = page.locator('input[type="password"]').first();
-        if (await pass.count() !== 1 || !(await pass.isVisible()))
+        // Target visible password inputs so hidden mobile/SSO inputs do not block login.
+        const pass = page.locator('input[type="password"]:visible').first();
+        if ((await pass.count()) === 0 || !(await pass.isVisible()))
           throw new Error("No visible password input in the main document");
-        const login = await vault.getLogin(profile, itemId, pageUrl);
+
+        let targetId = typeof itemId === "string" && itemId.trim() ? itemId.trim() : null;
+        if (!targetId) {
+          let pageOrigin;
+          try {
+            pageOrigin = new URL(pageUrl).origin;
+          } catch {
+            throw new Error(`Invalid page URL: ${pageUrl}`);
+          }
+          const matches = vault.list(profile).filter((entry) => entry.origin === pageOrigin);
+          if (matches.length === 0) {
+            throw new Error(`No credentials found for origin ${pageOrigin}`);
+          }
+          if (matches.length > 1) {
+            const ids = matches.map((m) => m.id).join(", ");
+            throw new Error(`Multiple credentials match origin ${pageOrigin}: ${ids}. Please specify item_id.`);
+          }
+          targetId = matches[0].id;
+        }
+
+        const login = await vault.getLogin(profile, targetId, pageUrl);
         // Re-check origin after async vault lookup to prevent navigation races.
         if (new URL(page.url()).origin !== new URL(pageUrl).origin)
           throw new Error("Login page changed during credential lookup");
         if (login.username) {
-          const name = page.locator('input[autocomplete="username"], input[type="email"], input[name="username"]').first();
-          if (await name.count() && await name.isVisible()) await name.fill(login.username);
+          const name = page.locator(
+            'input[autocomplete="username"]:visible, input[type="email"]:visible, input[name="username"]:visible, input#username:visible, input[name="session_key"]:visible, input[name="login"]:visible'
+          ).first();
+          if ((await name.count()) && (await name.isVisible())) await name.fill(login.username);
         }
         await pass.fill(login.password);
-        return { success: true, profile: profile.slug, tab: tabId, origin: new URL(pageUrl).origin };
+        return {
+          success: true,
+          profile: profile.slug,
+          tab: tabId,
+          origin: new URL(pageUrl).origin,
+          itemId: targetId,
+        };
       } finally {
         this.#touchTab(e, tabId, false);
       }

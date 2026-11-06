@@ -603,14 +603,42 @@ export const TOOLS = [
     },
   },
   {
-    name: "browser_credential_fill",
+    name: "browser_credential_list",
     scope: "browser",
-    description: "Fill a saved Portal Vault login by credential ID in the current bot's browser. The password is never returned.",
-    inputSchema: obj({ ...COMPUTER_ARG, ...TAB_ARG, item_id: { type: "string" } }, ["item_id"]),
+    description:
+      "List saved credentials in the Portal Vault for the current bot profile. Returns id, name, origin, username, and updatedAt. Passwords are never returned.",
+    inputSchema: obj({ ...COMPUTER_ARG }),
     run: async (ctx, args) => {
       resolveComputer(ctx, args.computer);
       const profile = effectiveProfile(ctx, args);
-      return text(await ctx.browser.fillVaultLogin(profile, ctx.credentialVault, args.item_id, args.tab));
+      return text(ctx.credentialVault.list(profile));
+    },
+  },
+  {
+    name: "browser_credential_fill",
+    scope: "browser",
+    description:
+      "Fill a saved Portal Vault login in the current bot's browser. If item_id is omitted, auto-matches credentials by current page origin. The password is never returned.",
+    inputSchema: obj({
+      ...COMPUTER_ARG,
+      ...TAB_ARG,
+      item_id: {
+        type: "string",
+        description:
+          "Saved credential ID. Optional; if omitted, credentials matching the current page origin are used automatically.",
+      },
+    }),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      return text(
+        await ctx.browser.fillVaultLogin(
+          profile,
+          ctx.credentialVault,
+          args.item_id,
+          args.tab,
+        ),
+      );
     },
   },
   {

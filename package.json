@@ -18,7 +18,7 @@
   "private": true,
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node test/smoke.mjs && node test/upgrades.mjs && node test/speed_optimizations.mjs && node test/idle_sleep.mjs && node test/rfb-control.mjs && node test/password-snapshot.mjs && node test/credential-vault.mjs && node test/screenshot.mjs",
+    "test": "node test/smoke.mjs && node test/upgrades.mjs && node test/speed_optimizations.mjs && node test/idle_sleep.mjs && node test/rfb-control.mjs && node test/password-snapshot.mjs && node test/credential-vault.mjs && node test/screenshot.mjs && node test/credential-tools.mjs",
     "test:sandbox": "node test/sandbox.mjs",
     "test:upgrades": "node test/upgrades.mjs"
   },
