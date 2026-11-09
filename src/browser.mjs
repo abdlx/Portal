@@ -1153,7 +1153,9 @@ export class BrowserManager {
           const name = page.locator(
             'input[autocomplete="username"]:visible, input[type="email"]:visible, input[name="username"]:visible, input#username:visible, input[name="session_key"]:visible, input[name="login"]:visible'
           ).first();
-          if ((await name.count()) && (await name.isVisible())) await name.fill(login.username);
+          if ((await name.count()) && (await name.isVisible()) && (await name.isEnabled())) {
+            await name.fill(login.username);
+          }
         }
         await pass.fill(login.password);
         return {

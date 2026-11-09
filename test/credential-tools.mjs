@@ -186,6 +186,7 @@ try {
             first: () => ({
               count: async () => (visibleUsernames.length > 0 ? 1 : 0),
               isVisible: async () => visibleUsernames.length > 0,
+              isEnabled: async () => (visibleUsernames[0] ? visibleUsernames[0].enabled !== false : true),
               fill: async (val) => {
                 if (visibleUsernames[0]) visibleUsernames[0].filled = val;
               },
@@ -197,6 +198,7 @@ try {
           first: () => ({
             count: async () => 0,
             isVisible: async () => false,
+            isEnabled: async () => true,
             fill: async () => {},
           }),
         };
@@ -263,6 +265,23 @@ try {
     check("fillVaultLogin succeeds when multiple visible password inputs exist", result.success === true);
     check("first visible password input was filled", passElements[0].filled === "DEX_GITHUB_SECRET_TOKEN");
     check("second password input was NOT filled", passElements[1].filled === null);
+  }
+
+  // 4b2. Multi-step login flow: visible but disabled username input (e.g. Google, X) is not filled
+  {
+    const passElements = [{ visible: true, filled: null }];
+    const userElements = [{ visible: true, enabled: false, filled: null }];
+    const mockPage = createMockPage({
+      url: "https://github.com/login",
+      passwordInputs: passElements,
+      usernameInputs: userElements,
+    });
+    attachMockContext("dex", mockPage);
+
+    const result = await bm.fillVaultLogin(dexProf, vault, c2.id, "tab1");
+    check("fillVaultLogin succeeds with disabled username input in multi-step flow", result.success === true);
+    check("password input was filled cleanly", passElements[0].filled === "DEX_GITHUB_SECRET_TOKEN");
+    check("disabled username input was NOT filled", userElements[0].filled === null);
   }
 
   // 4c. Only hidden password inputs -> throws No visible password input
