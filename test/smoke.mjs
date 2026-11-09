@@ -99,6 +99,7 @@ try {
   const names = (list.json?.result?.tools || []).map((t) => t.name);
   check("tools/list has computer_list + batch", names.includes("computer_list") && names.includes("batch"));
   check("tools/list has browser_credential_list + browser_credential_fill", names.includes("browser_credential_list") && names.includes("browser_credential_fill"));
+  check("tools/list has browser_evaluate", names.includes("browser_evaluate"));
   check("tools/list hides admin tools from bot token", !names.includes("computer_create"));
 
   // 4. Bare tools/call with NO prior initialize (the panel path)

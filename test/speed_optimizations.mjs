@@ -221,6 +221,8 @@ console.log("== Running Portal Speed Optimizations Verification ==\n");
   let clickParams = null;
   let fillParams = null;
   let keysTyped = [];
+  let keysPressed = [];
+  let insertedTexts = [];
 
   const mockLocator = {
     first: () => mockLocator,
@@ -242,9 +244,14 @@ console.log("== Running Portal Speed Optimizations Verification ==\n");
       up: async () => {},
     },
     keyboard: {
-      press: async () => {},
+      press: async (k) => {
+        keysPressed.push(k);
+      },
       type: async (char) => {
         keysTyped.push(char);
+      },
+      insertText: async (t) => {
+        insertedTexts.push(t);
       },
     },
   };
@@ -283,6 +290,16 @@ console.log("== Running Portal Speed Optimizations Verification ==\n");
   keysTyped = [];
   await bm.fill({ slug: "test-profile" }, "e2", "stealthval", "tab1", { stealth: true });
   check("stealth fill types characters sequentially", keysTyped.join("") === "stealthval");
+
+  // Multiline fill
+  clickParams = null;
+  keysPressed = [];
+  insertedTexts = [];
+  await bm.fill({ slug: "test-profile" }, "e2", "first line\nsecond line\n\nfourth line", "tab1");
+  check("multiline fill uses force: true on click", clickParams?.force === true);
+  check("multiline fill clears text via Control+a and Backspace", keysPressed[0] === "Control+a" && keysPressed[1] === "Backspace");
+  check("multiline fill inserts text per non-empty line", insertedTexts.length === 3 && insertedTexts[0] === "first line" && insertedTexts[1] === "second line" && insertedTexts[2] === "fourth line");
+  check("multiline fill presses Enter between lines", keysPressed.filter((k) => k === "Enter").length === 3);
 
   bm.stopIdleCleanup();
 }

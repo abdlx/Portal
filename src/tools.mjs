@@ -603,6 +603,28 @@ export const TOOLS = [
     },
   },
   {
+    name: "browser_evaluate",
+    scope: "browser",
+    description: "Evaluate a JavaScript expression in the page context and return the result.",
+    inputSchema: obj(
+      {
+        ...COMPUTER_ARG,
+        ...TAB_ARG,
+        expression: {
+          type: "string",
+          description: "JavaScript expression to evaluate in the page context",
+        },
+      },
+      ["expression"],
+    ),
+    run: async (ctx, args) => {
+      resolveComputer(ctx, args.computer);
+      const profile = effectiveProfile(ctx, args);
+      const result = await ctx.browser.evaluate(profile, args.expression, args.tab);
+      return text(result !== undefined ? JSON.stringify(result, null, 2) : "undefined");
+    },
+  },
+  {
     name: "browser_credential_list",
     scope: "browser",
     description:

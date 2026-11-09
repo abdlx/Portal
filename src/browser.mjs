@@ -1054,7 +1054,20 @@ export class BrowserManager {
         const loc = (sel.startsWith("/") || sel.startsWith("xpath="))
           ? pg.locator(sel.startsWith("xpath=") ? sel : `xpath=${sel}`).first()
           : pg.locator(sel).first();
-        if (opts.stealth) {
+        if (text.includes("\n")) {
+          await loc.click({ force: true, timeout: 5000 });
+          await pg.keyboard.press("Control+a");
+          await pg.keyboard.press("Backspace");
+          const lines = text.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].length > 0) {
+              await pg.keyboard.insertText(lines[i]);
+            }
+            if (i < lines.length - 1) {
+              await pg.keyboard.press("Enter");
+            }
+          }
+        } else if (opts.stealth) {
           await loc.click({ timeout: 5000 });
           await pg.keyboard.press("Control+a");
           await pg.keyboard.press("Backspace");
@@ -1173,6 +1186,20 @@ export class BrowserManager {
           "(() => (document.body ? document.body.innerText.slice(0, 50000) : ''))()",
         );
         return { url: pg.url(), title, tab: tabId, text };
+      } finally {
+        this.#touchTab(e, tabId, false);
+      }
+    });
+  }
+
+  async evaluate(profile, expression, tab) {
+    const e = await this.ensure(profile);
+    return this.#chain(profile.slug, async () => {
+      const pg = await this.#activePage(e, tab);
+      const tabId = e.tabs.get(pg);
+      this.#touchTab(e, tabId, true);
+      try {
+        return await pg.evaluate(expression);
       } finally {
         this.#touchTab(e, tabId, false);
       }
