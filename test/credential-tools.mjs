@@ -372,6 +372,68 @@ try {
     check("explicit item_id with origin mismatch throws", threw);
   }
 
+  // 4h. Apex origin auto-matches www subdomain
+  {
+    const apexCred = vault.add(dexProf, {
+      name: "Apex Site",
+      origin: "https://my-site.com",
+      username: "user-apex",
+      password: "SECRET_APEX_PASSWORD",
+    });
+    const passElements = [{ visible: true, filled: null }];
+    const userElements = [{ visible: true, filled: null }];
+    const mockPage = createMockPage({
+      url: "https://www.my-site.com/login",
+      passwordInputs: passElements,
+      usernameInputs: userElements,
+    });
+    attachMockContext("dex", mockPage);
+
+    const result = await bm.fillVaultLogin(dexProf, vault, undefined, "tab1");
+    check("fillVaultLogin auto-matches apex origin to www subdomain", result.success === true && result.itemId === apexCred.id);
+    check("password filled from apex credential", passElements[0].filled === "SECRET_APEX_PASSWORD");
+  }
+
+  // 4i. www origin auto-matches apex domain
+  {
+    const wwwCred = vault.add(dexProf, {
+      name: "WWW Site",
+      origin: "https://www.other-site.com",
+      username: "user-www",
+      password: "SECRET_WWW_PASSWORD",
+    });
+    const passElements = [{ visible: true, filled: null }];
+    const userElements = [{ visible: true, filled: null }];
+    const mockPage = createMockPage({
+      url: "https://other-site.com/login",
+      passwordInputs: passElements,
+      usernameInputs: userElements,
+    });
+    attachMockContext("dex", mockPage);
+
+    const result = await bm.fillVaultLogin(dexProf, vault, undefined, "tab1");
+    check("fillVaultLogin auto-matches www origin to apex domain", result.success === true && result.itemId === wwwCred.id);
+    check("password filled from www credential", passElements[0].filled === "SECRET_WWW_PASSWORD");
+  }
+
+  // 4j. Untrusted subdomains do NOT match
+  {
+    const passElements = [{ visible: true, filled: null }];
+    const mockPage = createMockPage({
+      url: "https://evil.my-site.com/login",
+      passwordInputs: passElements,
+    });
+    attachMockContext("dex", mockPage);
+
+    let autoMatchThrew = false;
+    try {
+      await bm.fillVaultLogin(dexProf, vault, undefined, "tab1");
+    } catch (e) {
+      autoMatchThrew = /No credentials found for origin/.test(e.message);
+    }
+    check("auto-match rejects untrusted subdomain", autoMatchThrew);
+  }
+
   // 5. Tool integration test: browser_credential_fill calling fillVaultLogin
   {
     let toolCalledWith = null;

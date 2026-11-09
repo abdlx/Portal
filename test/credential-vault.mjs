@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CredentialVault, normalizeOrigin } from "../src/credential-vault.mjs";
+import { CredentialVault, normalizeOrigin, originsMatch } from "../src/credential-vault.mjs";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "portal-secrets-"));
 const profiles = [
@@ -30,7 +30,29 @@ try {
   assert.equal(reload.getLogin(profiles[0], item.id, "https://example.com").username, "alice");
   const renamed = { ...profiles[0], slug: "social-agent" };
   assert.equal(reload.getLogin(renamed, item.id, "https://example.com").username, "alice");
+  // Test originsMatch helper directly
+  assert.equal(originsMatch("https://linkedin.com", "https://www.linkedin.com"), true);
+  assert.equal(originsMatch("https://www.linkedin.com", "https://linkedin.com"), true);
+  assert.equal(originsMatch("https://linkedin.com", "https://linkedin.com"), true);
+  assert.equal(originsMatch("https://linkedin.com", "https://evil.linkedin.com"), false);
+  assert.equal(originsMatch("https://linkedin.com", "http://www.linkedin.com"), false);
+  assert.equal(originsMatch("https://linkedin.com:8443", "https://www.linkedin.com:8443"), true);
+  assert.equal(originsMatch("https://linkedin.com:8443", "https://www.linkedin.com:9443"), false);
+  assert.equal(originsMatch("invalid-url", "https://linkedin.com"), false);
+
+  // Test getLogin with apex origin matching www subdomain
+  const linkedinItem = vault.add(profiles[0], {
+    name: "LinkedIn Apex Account",
+    origin: "https://linkedin.com",
+    username: "abdullah",
+    password: "LINKEDIN_SECRET_PASSWORD",
+  });
+  assert.equal(vault.getLogin(profiles[0], linkedinItem.id, "https://www.linkedin.com/login/").password, "LINKEDIN_SECRET_PASSWORD");
+  assert.equal(vault.getLogin(profiles[0], linkedinItem.id, "https://linkedin.com/login/").password, "LINKEDIN_SECRET_PASSWORD");
+  assert.throws(() => vault.getLogin(profiles[0], linkedinItem.id, "https://evil.linkedin.com/login/"));
+
   assert.equal(reload.remove(profiles[0], item.id).deleted, true);
+  assert.equal(reload.remove(profiles[0], linkedinItem.id).deleted, true);
   assert.equal(reload.list(profiles[0]).length, 0);
   console.log("PASS encrypted per-bot storage, isolation, origin validation, persistence, rename, deletion");
 } finally {

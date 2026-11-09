@@ -29,6 +29,20 @@ export function normalizeOrigin(input) {
   return url.origin;
 }
 
+export function originsMatch(originA, originB) {
+  if (originA === originB) return true;
+  try {
+    const a = new URL(originA);
+    const b = new URL(originB);
+    if (a.protocol !== b.protocol || a.port !== b.port) return false;
+    const hostA = a.hostname.replace(/^www\./, '');
+    const hostB = b.hostname.replace(/^www\./, '');
+    return hostA === hostB;
+  } catch {
+    return false;
+  }
+}
+
 export class CredentialVault {
   constructor(store) {
     this.store = store;
@@ -120,7 +134,7 @@ export class CredentialVault {
     const actual = normalizeOrigin(pageUrl);
     const item = this.#load(profile).find((x) => x.id === id);
     if (!item) throw new Error("Credential not found in this profile");
-    if (item.origin !== actual) throw new Error("Browser origin does not match the saved credential");
+    if (!originsMatch(item.origin, actual)) throw new Error("Browser origin does not match the saved credential");
     return { username: item.username || null, password: item.password };
   }
 }

@@ -35,6 +35,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startDisplay, stopDisplay, VIEW_WIDTH, VIEW_HEIGHT } from "./vnc.mjs";
 import { getSystemHeadroom } from "./tools.mjs";
+import { originsMatch } from "./credential-vault.mjs";
 
 const IDLE_SLEEP_MS = Math.max(60_000, Number(process.env.PORTAL_BROWSER_IDLE_SLEEP_MINUTES || 30) * 60_000);
 const SESSION_FILE = "open-tabs.json";
@@ -1120,7 +1121,7 @@ export class BrowserManager {
           } catch {
             throw new Error(`Invalid page URL: ${pageUrl}`);
           }
-          const matches = vault.list(profile).filter((entry) => entry.origin === pageOrigin);
+          const matches = vault.list(profile).filter((entry) => originsMatch(entry.origin, pageOrigin));
           if (matches.length === 0) {
             throw new Error(`No credentials found for origin ${pageOrigin}`);
           }
@@ -1133,7 +1134,7 @@ export class BrowserManager {
 
         const login = await vault.getLogin(profile, targetId, pageUrl);
         // Re-check origin after async vault lookup to prevent navigation races.
-        if (new URL(page.url()).origin !== new URL(pageUrl).origin)
+        if (!originsMatch(new URL(page.url()).origin, new URL(pageUrl).origin))
           throw new Error("Login page changed during credential lookup");
         if (login.username) {
           const name = page.locator(
